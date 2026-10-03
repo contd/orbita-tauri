@@ -1,0 +1,26 @@
+{
+  "name": "orbita-tauri",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "bun test tests",
+    "test:e2e": "playwright test",
+    "docs": "typedoc",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@tauri-apps/cli": "^2",
+    "typedoc": "^0.28.20",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3"
+  }
+}

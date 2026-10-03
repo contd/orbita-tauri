@@ -1,0 +1,63 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bunx tsc --noEmit
+      - run: bun test tests
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bunx playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report
+  docs:
+    needs: [unit, e2e]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run docs
+      - uses: actions/download-artifact@v4
+        with:
+          name: playwright-report
+          path: docs-site/e2e-report
+        continue-on-error: true
+      - name: Reports index
+        run: |
+          cat > docs-site/index.html <<'H'
+          <!doctype html><html><head><meta charset="utf-8"><title>Orbita reports</title>
+          <link rel="icon" href="data:,"></head><body>
+          <header><h1>Orbita</h1></header>
+          <ul><li><a href="api/index.html">API documentation</a></li>
+          <li><a href="e2e-report/index.html">E2E test report</a> (if unavailable, see the CI run artifacts)</li></ul>
+          </body></html>
+          H
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site
+      - id: deploy
+        uses: actions/deploy-pages@v4

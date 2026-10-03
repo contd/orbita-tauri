@@ -1,0 +1,5 @@
+{
+  "entryPoints": ["src/model.ts", "src/terminal.ts", "src/kubeconfig.ts"],
+  "out": "docs-site/api",
+  "name": "Orbita API"
+}
