@@ -34,7 +34,8 @@ The application should support Windows, macOS, and Linux packaging. It should us
 On startup:
 
 - Load the saved theme, density, selected context, kubeconfig search path, and saved pasted kubeconfigs.
-- Detect `kubectl`, Docker, and kind concurrently.
+- Detect `kubectl`, Docker, kind, AWS CLI, and bash concurrently.
+- On Windows, also detect WSL and whether bash is available directly or via WSL.
 - Discover available Kubernetes contexts.
 - Select the previously selected context if it still exists; otherwise select the first discovered context.
 - Load the initial cluster snapshot for the selected context and namespace.
@@ -114,6 +115,8 @@ Use a left navigation sidebar with grouped entries in this order:
 
 Each entry has a recognizable icon, an active state, and, when loaded, a resource count. Hide zero counts until that collection has actually loaded. Allow navigation groups to collapse and expand. The initial collapsed state may be chosen for secondary groups, but the state must be clear through `aria-expanded` or an equivalent accessibility signal.
 
+The sidebar must also support collapsing into a compact icon-only rail with an explicit toggle in the sidebar header area. The main content region should responsively expand to use the freed width. Persist the collapsed/expanded choice across reloads.
+
 The Cluster group must include:
 
 - A context selector.
@@ -137,6 +140,11 @@ Each card should include a useful icon, semantic tone, primary value, and a boun
 
 Selecting a summary card must open its corresponding resource view: Pods Running opens Pods, Nodes Ready opens Nodes, Workloads Ready opens DaemonSets, and Warnings opens Events.
 
+The Dashboard title row should display:
+
+- The local current date.
+- A greeting based on local time (`Good morning`, `Good afternoon`, or `Good evening`).
+
 ### Cluster controls
 
 The top area must provide:
@@ -151,8 +159,19 @@ The top area must provide:
 
 ### CLI status
 
-Show status indicators for `kubectl`, Docker, and kind. Each indicator must have an accessible label and a hover/focus tooltip stating Detected, Not detected, or Checking availability. Include the resolved executable path in
-Settings when available.
+Show status indicators for `kubectl`, Docker, kind, AWS CLI, and bash. On Windows hosts, also show a WSL indicator. Each indicator must have an accessible label and a hover/focus tooltip stating Detected, Not detected, or Checking availability. Include resolved executable paths in Settings when available.
+
+## Status Bar
+
+Provide a status bar pinned to the bottom edge of the application shell. It must include:
+
+- The selected context.
+- CLI status indicators.
+- A dismissible notice area.
+- A terminal-open action.
+- Application version information and mode marker where applicable.
+
+Do not include namespace text in the status bar.
 
 ## Kubernetes Resource Views
 
@@ -281,17 +300,29 @@ Required behavior:
 - Bind execution to the currently selected context.
 - Capture stdout, stderr, and exit code.
 - Enforce a bounded output size and a timeout around two minutes.
-- Show syntax-highlighted YAML-like output, stderr, errors, and an explicit exit status.
+- Show syntax-highlighted output in both modes:
+  - Text mode with shell-like highlighting and YAML-aware highlighting when output is YAML-like.
+  - JSON mode with highlighted keys and scalar values.
+- Show syntax-highlighted stderr and explicit exit status.
 - Maintain command history, scroll to the newest command, cap history at a reasonable maximum such as 1000 entries, and allow clearing history.
 - Allow clearing the current output.
-- Allow expanding/collapsing the output pane; expanded output should be much wider than the command pane.
-- Provide a Tab shortcut that expands a lone `k` input to `kubectl` and keeps the caret in the expected position.
+- Use a default split where output is wider than command history, and allow users to resize the boundary by dragging the divider between panes.
+- Provide an expand/collapse panel control that switches between an approximately two-thirds-height panel and a full-height panel.
+- Keep command input at one visual line by default, auto-growing to at most two lines when wrapping.
+- Provide command shortcuts:
+  - `Tab` on a lone `k` expands to `kubectl`.
+  - Typing `k ` auto-expands to `kubectl `.
+  - Typing `kub` auto-expands to `kubectl `.
+- Provide a TEXT/JSON format toggle styled as a two-label switch. Changing the selection should:
+  - Re-run the last command in the selected format when a command already exists.
+  - Apply to the next command when no command has run yet.
+- Keep the terminal open unless the explicit Close action is clicked.
 
 When kubectl is unavailable:
 
 - Disable the command input, Run action, output toggle, and clear actions.
 - Visually dim the terminal and show an overlay explaining why it is unavailable and how to install/restart.
-- Keep Docker and kind indicators independent; their absence must not disable the terminal if kubectl is available.
+- Keep non-kubectl tool indicators independent; missing Docker, kind, AWS CLI, bash, or WSL must not disable the terminal if kubectl is available.
 
 ## Resource Logs
 
@@ -311,7 +342,7 @@ Provide a Settings view accessible from the toolbar and the native application m
 - A visible success message after saving.
 - Validation and error feedback for empty or invalid values.
 - A list of saved pasted kubeconfigs, each with an editable YAML textarea and Save kubeconfig action.
-- Read-only detected executable paths for Docker, kind, and kubectl.
+- Read-only detected executable paths for kubectl, Docker, kind, AWS CLI, and bash, plus WSL on Windows.
 - Back navigation to the cluster view.
 
 Saving settings must refresh context discovery and cluster data. Updating a saved kubeconfig must refresh saved entries and context selection.
@@ -324,6 +355,7 @@ Provide an About view opened through the desktop application's native Help or Ab
 - Description.
 - Author and optional email.
 - Repository URL.
+- A Built Using section showing Tauri, Vite, and TypeScript.
 - A back-to-cluster action.
 
 The native menu should also be able to open Settings. The UI must handle menu events arriving after initial rendering.
@@ -348,11 +380,10 @@ The host/UI bridge should provide equivalents of these operations:
 - `getResources(kind, namespace, contextId?)` -> one collection.
 - `getResource(kind, namespace, name, contextId?)` -> one object.
 - `runKubectl(command, contextId?)` -> stdout, stderr, exit code.
-- `checkCliTools()` -> availability, message, and executable path for kubectl, Docker, and kind.
+- `checkCliTools()` -> host OS metadata plus availability, message, and executable path for kubectl, Docker, kind, AWS CLI, bash, and WSL.
 - `getSettings()` -> search path, saved kubeconfigs, CLI availability.
 - `setKubeconfigSearchPath(path)` -> updated settings.
 - `updateSavedKubeconfig(id, yaml)` -> updated settings.
-- `getAbout()` -> product metadata.
 
 Use a normalized resource model with optional Kubernetes metadata, spec, status, data, rules, subjects, secrets, role references, event fields, and involved-object fields. Treat missing fields as normal because Kubernetes
 objects differ by kind and cluster version.
@@ -392,6 +423,7 @@ Create automated unit and end-to-end tests that verify at least the following:
 - Pod readiness, workload readiness, Job lifecycle, CronJob state, PV status, StorageClass defaults, memory quantities, labels, and resource columns are correct.
 - Status text maps to healthy, warning, danger, and neutral tones.
 - YAML manifests exclude managedFields and syntax highlighting escapes markup.
+- Terminal output highlighting escapes markup and correctly styles shell-like text and JSON token classes.
 - Kubeconfig/terminal command parsing accepts aliases and quoted arguments, and rejects empty input, unfinished quoting, context overrides, and kubeconfig overrides.
 - Demo snapshots populate every supported resource collection.
 
@@ -399,7 +431,7 @@ Create automated unit and end-to-end tests that verify at least the following:
 
 - A deterministic mocked bridge can launch the app without kubectl, kubeconfig,
  or a live cluster.
-- The app initially shows Connected to a test context and all CLI indicators.
+- The app initially shows Connected to a test context and all expected CLI indicators, including AWS CLI and bash (plus WSL on Windows fixtures).
 - Every sidebar resource view opens, has the correct heading, has rows, and
  exposes the expected table columns.
 - Dashboard summary cards render and do not show a resource table.
@@ -411,14 +443,16 @@ Create automated unit and end-to-end tests that verify at least the following:
 - Settings opens from the toolbar and native-menu event, saves a search path,
  edits a saved kubeconfig, reloads persisted values, and adds a kubeconfig.
 - The kubectl terminal sends the selected context, renders output and exit
- status, maintains history, clears output/history, expands output, and
- supports the `k` shortcut. The terminal panel opens from both toolbar and
- status bar while preserving the active view.
+ status, maintains history, clears output/history, supports format switching,
+ applies syntax highlighting for text and JSON output, supports the `k`
+ shortcuts, and supports dragging the history/output splitter. The terminal
+ panel opens from both toolbar and status bar while preserving the active
+ view and closes only with its explicit Close action.
 - Resource Name actions and inspector actions open logs for supported
  workloads; Node logs aggregate recent logs from scheduled Pods, and closing
  the logs drawer returns to the prior view or inspector.
 - Missing kubectl disables only the terminal and shows the unavailable state;
- missing Docker or kind does not disable it.
+ missing non-kubectl tools does not disable it.
 - Theme and compact density controls update their state and layout.
 - Screenshots or equivalent visual regression artifacts cover the Dashboard,
  every resource view, Settings, saved kubeconfigs, unavailable terminal,

@@ -1,83 +1,189 @@
+/**
+ * Application entry point and controller.
+ *
+ * Holds all mutable UI state, talks to the native (Tauri) host or a test bridge, loads Kubernetes
+ * resources, and wires DOM events to state changes. Every change ends with `render`, which hands a
+ * read-only view of the state to the renderer. Pure Kubernetes logic lives in `./kubernetes`; markup and
+ * DOM access live in `./renderer`.
+ * @module main
+ */
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getKubeconfigContextNames, validateKubeconfig } from "./kubeconfig";
-import { parseKubectlCommand } from "./terminal";
 import {
-  age, ageDate, clock, compareValues, definitions, demo, escapeHtml, getDef, groups, highlightYaml, identity,
-  manifestYaml, namespace, nodeReady, rowStatus, statusTone, workloadReadiness,
-  type Resource, type ResourceKey,
-} from "./model";
+  clock, demo, demoLogs, expandKubectlShortcut, getDef, getKubeconfigContextNames, identity, manifestYaml, parseKubectlCommand, validateKubeconfig, withOutputFormat,
+  type OutputFormat, type Resource, type ResourceKey,
+} from "./kubernetes";
+import { packageInfo, type AboutInfo } from "./package-info";
+import { closestTo, escapeSelector, getRoot, logKinds, mount, onDocument, query, targetOf, type RenderState, type View } from "./renderer";
+import { isAppViewName, isResourceView } from "./views";
 
-type View = "dashboard" | "settings" | "about" | ResourceKey;
-
-const root = document.querySelector<HTMLElement>("#app")!;
+/**
+ * Preference values used when nothing has been saved yet.
+ * Also the shape of the persisted settings object (`theme`, `density`, kubeconfig `searchPath`, active `namespace`,
+ * `selectedContext` and pasted `savedConfigs`).
+ */
 const defaults = { theme: "dark", density: "normal", searchPath: "~/.kube", namespace: "All namespaces", selectedContext: "test-context", savedConfigs: [] as { id: string; name: string; yaml: string }[] };
+/**
+ * Current user preferences, loaded from `localStorage` on start and later replaced by the native host's copy.
+ * Falls back to the defaults when storage is empty or corrupt.
+ */
 let settings = (() => {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem("orbita-preferences") ?? "{}") }; }
   catch { return { ...defaults }; }
 })();
+/** The page currently shown: the dashboard, settings, about, or a resource list. */
 let view: View = "dashboard";
+/** Free-text filter applied to the current resource table. Reset whenever the view changes. */
 let search = "";
+/** Active table sort: the column label and direction (`1` ascending, `-1` descending). */
 let sort = { column: "Name", direction: 1 };
+/** The resource whose inspector panel is open, or `null` when it is closed. */
 let inspector: Resource | null = null;
+/** Which modal dialog is open (only the add-kubeconfig dialog exists), or `null`. */
 let dialog: "add-config" | null = null;
+/** Names of sidebar navigation groups the user has folded. */
 let collapsed = new Set<string>();
-let cli = { kubectl: false, docker: false, kind: false };
+/** localStorage key remembering whether the sidebar is collapsed to icons. */
+const SIDEBAR_KEY = "orbita-sidebar-collapsed";
+/** True when the sidebar shows icons only; restored from the previous session. */
+let sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
+/** Which command-line tools were detected on this machine. Everything starts as missing until checked. */
+const emptyCli: RenderState["cli"] = {
+  kubectl: false,
+  docker: false,
+  kind: false,
+  aws: false,
+  bash: false,
+  wsl: false,
+  hostWindows: false,
+};
+let cli = { ...emptyCli };
+/** True until the first tool detection finishes, so the UI can show "Checking availability". */
 let cliChecking = true;
+/** Resolved executable path for each detected tool, keyed by lower-case tool name. */
 let cliPaths: Record<string, string> = {};
+/** Whether the terminal panel fills the full height of the app (otherwise about two thirds). */
 let terminalExpanded = false;
+/** Width percentage of the command-history pane in the terminal body. */
+let terminalSplit = 18;
+/** Per-view resource table column widths in pixels, including each table's final actions column. */
+let tableColumnWidths: Partial<Record<ResourceKey, number[]>> = {};
+/** Output format applied to terminal commands; changing it re-runs the last command. */
+let terminalFormat: OutputFormat = "text";
+/** The last command that was run, re-run when the output format changes. Empty before any run. */
+let lastCommand = "";
+/** Text currently typed in the terminal command box. */
 let terminalInput = "";
+/** Standard output of the last terminal command. */
 let terminalOutput = "";
+/** Exit code of the last terminal command as a string, or `null` before any command has run. */
 let terminalStatus: string | null = null;
+/** Commands run in this session, newest last, with their output and exit status. Capped at 1000 entries. */
 let terminalHistory: { command: string; output: string; status: string }[] = [];
+/** Context names offered in demo mode, before any pasted kubeconfigs add more. */
 const baseContexts = ["test-context", "staging-us-west", "local-kind"];
+/** All Kubernetes context names shown in the context selector. */
 let contextNames = [...new Set([...baseContexts, settings.selectedContext])];
+/** The Kubernetes context all requests are made against. */
 let selectedContext = settings.selectedContext;
-/** In demo mode, contexts come from the built-in set plus saved pasted kubeconfigs. */
+/** Style metadata consumed by the context selector web component. */
+type ContextStyle = RenderState["contextOptions"][number]["style"];
+/** Shared style for generic contexts that do not match a special environment. */
+const defaultContextStyle: ContextStyle = {
+  accent: "#7aa2ff",
+  border: "#425a78",
+  background: "#141d29",
+  text: "#d7e6ff",
+};
+/**
+ * Context style by name pattern. This keeps environment hints (prod/staging/local) with the option data
+ * instead of hardcoding them in the rendering component.
+ */
+function styleForContext(name: string): ContextStyle {
+  if (/(^|[-_])(prod|production|live)([-_]|$)/i.test(name)) {
+    return { accent: "#ff9b7a", border: "#6d4d46", background: "#2c1f21", text: "#ffd4c7" };
+  }
+  if (/(^|[-_])(stage|staging|qa|preprod)([-_]|$)/i.test(name)) {
+    return { accent: "#ffd37a", border: "#665a3f", background: "#2b2418", text: "#ffe8b5" };
+  }
+  if (/(^|[-_])(local|kind|minikube|dev|test)([-_]|$)/i.test(name)) {
+    return { accent: "#7fd6b5", border: "#3c6659", background: "#182a24", text: "#c6f7e4" };
+  }
+  return defaultContextStyle;
+}
+/** Full context options payload (value, label and per-option style metadata). */
+function contextOptions(names: string[]): RenderState["contextOptions"] {
+  return names.map(name => ({ value: name, label: name, style: styleForContext(name) }));
+}
+/**
+ * In demo mode, rebuilds the context list from the built-in contexts plus the contexts of saved pasted kubeconfigs.
+ * If the selected context disappeared, falls back to the first available one. Does nothing when a real bridge exists,
+ * because the host reports the true contexts.
+ */
 function syncDemoContexts(): void {
   if (bridged()) return;
   contextNames = [...new Set([...baseContexts, ...settings.savedConfigs.flatMap((c: { yaml: string }) => getKubeconfigContextNames(c.yaml))])];
   if (!contextNames.includes(selectedContext)) { selectedContext = contextNames[0]; settings.selectedContext = selectedContext; }
 }
+/** Collections shown with counts in the sidebar on first load and fetched together for the dashboard. */
 const initialKeys: ResourceKey[] = ["namespaces", "nodes", "pods", "deployments", "daemonsets", "statefulsets", "events"];
+/** Collections whose data has been loaded; the sidebar only shows counts for these. */
 let loaded = new Set<ResourceKey>(initialKeys);
+/** Whether the kubectl terminal dialog is open. */
 let terminalOpen = false;
+/** Standard error of the last terminal command, shown separately from stdout. */
 let terminalStderr = "";
+/** State of the logs drawer, or `null` when closed. `opener` is the key of the control to refocus on close. */
 let logs: { title: string; body: string; state: "loading" | "ready" | "error" | "empty"; opener: string } | null = null;
-let about = { name: "Orbita", version: "0.1.0", description: "A focused workspace for Kubernetes cluster inspection.", author: "Orbita contributors", email: "", repository: "https://github.com/orbita" };
-const logKinds = new Set<ResourceKey>(["pods", "deployments", "daemonsets", "statefulsets", "replicasets", "jobs", "nodes"]);
+/** Application metadata for the About page and status bar, read from `package.json` at startup. */
+const about: AboutInfo = packageInfo;
 
-/** Bridge override used by automated tests; production uses the Tauri command bridge. */
+/** Signature of a command bridge: a command name plus JSON arguments, resolving to the host response. */
 type Bridge = (command: string, args?: Record<string, unknown>) => Promise<any>;
+/**
+ * Returns the test bridge installed on `window.__ORBITA_BRIDGE__`, if any.
+ * End-to-end tests install one so the app can run with no native host.
+ */
 const mockBridge = (): Bridge | undefined => (window as unknown as { __ORBITA_BRIDGE__?: Bridge }).__ORBITA_BRIDGE__;
+/** True when commands can be sent anywhere: either a test bridge or the real Tauri host. False means demo mode. */
 const bridged = (): boolean => Boolean(mockBridge()) || isTauri();
+/**
+ * Sends a command to the host. A test bridge takes priority over Tauri's `invoke`.
+ * @typeParam T - Expected response type.
+ * @param command - Name of the host command, such as `get_resources`.
+ * @param args - JSON-serialisable arguments for the command.
+ * @returns The host's response.
+ */
 function call<T = any>(command: string, args?: Record<string, unknown>): Promise<T> {
   const mock = mockBridge();
   return mock ? mock(command, args) : invoke<T>(command, args);
 }
+/** Collections with a fetch in flight; their tables show "Loading…". */
 let loadingCollections = new Set<ResourceKey>();
+/** Banner message shown on the dashboard and resource pages (connection state and errors). Empty hides it. */
 let notice = `Connected to ${selectedContext} · Showing deterministic demo data`;
+/** Human-readable time of the last refresh, displayed in headers and table footers. */
 let refreshTime = "Just now";
+/** True after the settings form was saved, to show the confirmation message. */
 let settingsSaved = false;
+/**
+ * Resource data per collection. Starts as a copy of the demo data; real fetches overwrite individual
+ * collections so unavailable ones keep showing demo data.
+ */
 let snapshot = { ...demo };
 
-function icon(name: string): string {
-  const paths: Record<string, string> = {
-    grid: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z",
-    cluster: "M12 3 20 7.5v9L12 21l-8-4.5v-9L12 3Zm0 0v18m8-13.5-16 9m0-9 16 9",
-    search: "m20 20-4.4-4.4M18 10.5a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z",
-    refresh: "M20 7v5h-5M4 17v-5h5m-4 0a7 7 0 0 1 12-4l3 4M4 12l3 4a7 7 0 0 0 12-4",
-    settings: "M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm0-6v2m0 15v2m10-9h-2M4 12H2m17.1-7.1-1.4 1.4M6.3 17.7l-1.4 1.4m14.2 0-1.4-1.4M6.3 6.3 4.9 4.9",
-    sun: "M12 3v2m0 14v2M3 12h2m14 0h2m-3.6-6.4-1.4 1.4m-8 8-1.4 1.4m12.2 0-1.4-1.4m-8-8L6.4 5.6M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z",
-    moon: "M20.5 14A8.5 8.5 0 0 1 10 3.5 8.5 8.5 0 1 0 20.5 14Z",
-    copy: "M8 8V4h12v12h-4M4 8h12v12H4z",
-    close: "m18 6-12 12M6 6l12 12",
-    plus: "M12 5v14m-7-7h14",
-    arrow: "M7 17 17 7M7 7h10v10",
-    chevron: "m9 18 6-6-6-6",
-  };
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name] ?? paths.grid}"/></svg>`;
+/** Empty resource collections used while switching contexts and waiting for fresh cluster data. */
+function emptySnapshot(): Record<ResourceKey, Resource[]> {
+  const next = {} as Record<ResourceKey, Resource[]>;
+  for (const key of Object.keys(demo) as ResourceKey[]) next[key] = [];
+  return next;
 }
+
+/**
+ * Persists preferences to `localStorage` and, when a host exists, to the host's preference store.
+ * A host failure is reported in the notice rather than thrown.
+ * @returns Resolves when the save attempt has finished.
+ */
 function saveSettings(): Promise<void> {
   localStorage.setItem("orbita-preferences", JSON.stringify(settings));
   if (!bridged()) return Promise.resolve();
@@ -87,217 +193,162 @@ function saveSettings(): Promise<void> {
   });
 }
 
-function renderSidebar(): string {
-  const nav = groups.map(group => {
-    const defs = definitions.filter(d => d.group === group);
-    const folded = collapsed.has(group);
-    return `<section class="nav-group">
-      <button class="group-heading" data-action="toggle-group" data-group="${escapeHtml(group)}" aria-expanded="${!folded}">
-        <span>${escapeHtml(group)}</span><span class="group-chevron ${folded ? "folded" : ""}">${icon("chevron")}</span>
-      </button>
-      ${!folded ? `${group === "Cluster" ? `<button class="nav-item ${view === "dashboard" ? "active" : ""}" data-view="dashboard"><span class="nav-icon">${icon("grid")}</span><span class="nav-label">Dashboard</span></button>` : ""}${defs.map(d => {
-        const count = loaded.has(d.key) ? snapshot[d.key]?.length ?? 0 : 0;
-        const active = view === d.key;
-        return `<button class="nav-item ${active ? "active" : ""}" data-view="${d.key}" title="${escapeHtml(d.label)}">
-          <span class="nav-icon">${escapeHtml(d.icon)}</span><span class="nav-label">${escapeHtml(d.label)}</span>${count ? `<span class="nav-count">${count}</span>` : ""}
-        </button>`;
-      }).join("")}${group === "Cluster" ? `<button class="nav-add-config" data-action="add-config">${icon("plus")} Add kubeconfig</button>` : ""}` : ""}
-    </section>`;
-  }).join("");
-  return `<aside class="sidebar">
-    <div class="brand"><div class="brand-mark">${icon("cluster")}</div><div><strong>orbita</strong><span>CLUSTER CONSOLE</span></div></div>
-    <div class="cluster-card">
-      <div class="cluster-topline"><span class="status-pulse"></span><span>ACTIVE CLUSTER</span><span class="connection-label">DEMO</span></div>
-      <label for="context-select">Context</label><select id="context-select" aria-label="Current context">${contextNames.map(context => `<option value="${escapeHtml(context)}" ${selectedContext === context ? "selected" : ""}>${escapeHtml(context)}</option>`).join("")}</select>
-      <div class="cluster-namespace"><span class="namespace-dot"></span><span>Namespace</span><strong>${escapeHtml(settings.namespace)}</strong></div>
-    </div>
-    <div class="nav-scroll">${nav}</div>
-    <div class="sidebar-bottom">
-      <button class="nav-item ${view === "settings" ? "active" : ""}" data-view="settings"><span class="nav-icon">${icon("settings")}</span><span class="nav-label">Settings</span></button>
-      <div class="sidebar-user"><div class="avatar">O</div><div><strong>Orbita workspace</strong><span>Local environment</span></div><span class="more">···</span></div>
-    </div>
-  </aside>`;
+/**
+ * Read-only view of the controller's variables handed to the renderer.
+ * Getters are used so the renderer always sees current values even though the variables are reassigned.
+ */
+const state: RenderState = {
+  get view() { return view; }, get search() { return search; }, get sort() { return sort; }, get inspector() { return inspector; },
+  get dialog() { return dialog; }, get collapsed() { return collapsed; }, get sidebarCollapsed() { return sidebarCollapsed; }, get cli() { return cli; }, get cliChecking() { return cliChecking; },
+  get cliPaths() { return cliPaths; }, get terminalOpen() { return terminalOpen; }, get terminalExpanded() { return terminalExpanded; }, get terminalSplit() { return terminalSplit; }, get terminalFormat() { return terminalFormat; },
+  get tableColumnWidths() { return tableColumnWidths; },
+  get terminalInput() { return terminalInput; }, get terminalOutput() { return terminalOutput; }, get terminalStderr() { return terminalStderr; },
+  get terminalStatus() { return terminalStatus; }, get terminalHistory() { return terminalHistory; }, get contextNames() { return contextNames; },
+  get contextOptions() { return contextOptions(contextNames); }, get selectedContext() { return selectedContext; }, get loaded() { return loaded; },
+  get loadingCollections() { return loadingCollections; },
+  get logs() { return logs; }, get about() { return about; }, get notice() { return notice; }, get refreshTime() { return refreshTime; },
+  get settings() { return settings; }, get settingsSaved() { return settingsSaved; }, get snapshot() { return snapshot; }, get bridged() { return bridged(); },
+};
+
+/** Re-renders the whole interface from the current state. */
+function render(): void {
+  mount(state);
+  fitTerminalInput();
 }
 
-function renderHeader(): string {
-  const isDashboard = view === "dashboard";
-  const title = view === "dashboard" ? "Dashboard" : view === "settings" ? "Settings" : view === "about" ? "About Orbita" : getDef(view).label;
-  return `<header class="topbar">
-    <div class="breadcrumb"><span>Cluster</span><span class="crumb-sep">/</span><strong>${escapeHtml(title)}</strong></div>
-    <div class="top-actions">
-      ${isDashboard || typeof view === "string" && definitions.some(d => d.key === view) ? `<label class="global-search">${icon("search")}<input id="search-input" type="search" value="${escapeHtml(search)}" placeholder="Search resources..." aria-label="Search resources"><kbd>⌘ K</kbd></label>` : ""}
-      ${isDashboard || (definitions.some(d => d.key === view) && getDef(view as ResourceKey).namespaced) ? `<label class="select-control header-select"><span>Namespace</span><select id="namespace-select" aria-label="Namespace">${["All namespaces", ...snapshot.namespaces.map(n => n.metadata.name)].map(n => `<option ${settings.namespace === n ? "selected" : ""}>${escapeHtml(n)}</option>`).join("")}</select></label>` : ""}
-      ${isDashboard || definitions.some(d => d.key === view) ? `<button class="icon-button" data-action="refresh" aria-label="Refresh cluster" title="Refresh cluster">${icon("refresh")}</button>` : ""}
-      <div class="divider"></div>
-      <button class="icon-button" data-action="toggle-theme" aria-label="Toggle light and dark theme" title="Toggle theme">${icon(settings.theme === "dark" ? "sun" : "moon")}</button>
-      <label class="density-wrap" title="Density"><span class="density-icon">☷</span><select id="density-select" aria-label="Density"><option value="cozy" ${settings.density === "cozy" ? "selected" : ""}>Cozy</option><option value="normal" ${settings.density === "normal" ? "selected" : ""}>Normal</option><option value="compact" ${settings.density === "compact" ? "selected" : ""}>Compact</option></select></label>
-      <button class="toolbar-button" data-action="open-terminal" aria-label="Open kubectl terminal"><span class="terminal-glyph">&gt;_</span><span>Terminal</span></button>
-      <button class="toolbar-button" data-view="settings">${icon("settings")}<span>Settings</span></button>
-    </div>
-  </header>`;
+const TERMINAL_SPLIT_MIN = 14;
+const TERMINAL_SPLIT_MAX = 55;
+let draggingTerminalSplit = false;
+const TABLE_COLUMN_MIN = 24;
+type TableColumnDrag = { key: ResourceKey; index: number; startX: number; startWidths: number[] };
+let tableColumnDrag: TableColumnDrag | null = null;
+
+/** Clamps the terminal split percentage into the supported range. */
+function clampTerminalSplit(value: number): number {
+  return Math.min(TERMINAL_SPLIT_MAX, Math.max(TERMINAL_SPLIT_MIN, value));
 }
 
-function renderCli(): string {
-  return `<div class="cli-status">${(["kubectl", "Docker", "kind"] as const).map(label => {
-    const key = label.toLowerCase();
-    const detected = cli[key as keyof typeof cli];
-    const state = cliChecking ? "Checking availability" : detected ? "Detected" : "Not detected";
-    return `<div class="cli-pill" data-cli="${key}" tabindex="0" role="img" aria-label="${label}: ${state}"><span class="cli-dot ${detected ? "up" : ""}"></span>${label}<span class="cli-tooltip" role="tooltip">${state}</span></div>`;
-  }).join("")}</div>`;
-}
-function renderStatusBar(): string {
-  return `<footer class="status-bar"><span class="cluster-connected"><span class="connected-dot"></span>Connected to <strong>${escapeHtml(selectedContext)}</strong></span><span class="status-sep">·</span><span class="status-namespace">${escapeHtml(settings.namespace)}</span>${renderCli()}<span class="status-spacer"></span><button class="status-button" data-action="open-terminal" aria-label="Open kubectl terminal in status bar"><span class="terminal-glyph">&gt;_</span> Terminal</button><span class="footer-meta">Orbita v${escapeHtml(about.version)}${bridged() ? "" : " · Demo mode"}</span></footer>`;
+/** Applies the split as a CSS variable to the rendered terminal body. */
+function paintTerminalSplit(): void {
+  const body = query<HTMLElement>(".terminal-body");
+  if (body) body.style.setProperty("--terminal-left", `${terminalSplit}%`);
 }
 
-function ratio(ready: number, total: number): number { return total ? Math.max(0, Math.min(100, ready / total * 100)) : 0; }
-function renderMetric(label: string, value: string, detail: string, pct: number, tone: string, symbol: string, target: ResourceKey): string {
-  return `<button type="button" class="metric-card ${tone}" data-view="${target}" data-metric="${escapeHtml(label)}" aria-label="${escapeHtml(label)}: open ${escapeHtml(getDef(target).label)}">
-    <div class="metric-top"><span class="metric-icon">${symbol}</span><span class="metric-kicker">${escapeHtml(label)}</span><span class="metric-menu">···</span></div>
-    <div class="metric-value">${value}</div><div class="metric-detail">${escapeHtml(detail)}</div>
-    <div class="metric-track"><span style="width:${Math.round(pct)}%"></span></div><div class="metric-footer"><span>${Math.round(pct)}% of total</span><span class="metric-trend">●&nbsp; Live</span></div>
-  </button>`;
-}
-function renderDashboard(): string {
-  const pods = snapshot.pods;
-  const running = pods.filter(p => p.status?.phase === "Running").length;
-  const nodes = snapshot.nodes;
-  const readyNodes = nodes.filter(nodeReady).length;
-  const workloadItems = [...snapshot.deployments, ...snapshot.daemonsets, ...snapshot.statefulsets];
-  const desired = workloadItems.reduce((n, r) => n + workloadReadiness(r).desired, 0);
-  const ready = workloadItems.reduce((n, r) => n + workloadReadiness(r).ready, 0);
-  const warnings = snapshot.events.filter(e => e.type === "Warning").length + nodes.length - readyNodes;
-  const pctPods = ratio(running, pods.length), pctNodes = ratio(readyNodes, nodes.length), pctWorkloads = ratio(ready, desired);
-    return `<div class="page-content dashboard-page">
-    <div class="page-title-row">
-      <div><div class="eyebrow">OVERVIEW <span>·</span> OCT 03, 2026</div><h1>Good morning, operator <span class="wave">✦</span></h1><p class="page-subtitle">Here's what's happening across your cluster today.</p></div>
-      <div class="page-title-actions"><div class="live-indicator"><span></span>Live data</div><button class="button primary" data-action="add-config">${icon("plus")} Add cluster</button></div>
-    </div>
-    <div class="notice"><span class="notice-icon">i</span><span>${escapeHtml(notice)}</span><button aria-label="Dismiss notice" data-action="dismiss-notice">${icon("close")}</button></div>
-    <div class="metric-grid">
-      ${renderMetric("PODS RUNNING", `${running}<span class="metric-slash">/${pods.length}</span>`, `${pods.length - running} need attention`, pctPods, "blue", "▣", "pods")}
-      ${renderMetric("NODES READY", `${readyNodes}<span class="metric-slash">/${nodes.length}</span>`, `${nodes.length - readyNodes} node needs attention`, pctNodes, "mint", "⬡", "nodes")}
-      ${renderMetric("WORKLOADS READY", `${ready}<span class="metric-slash">/${desired}</span>`, `${workloadItems.length} workloads across cluster`, pctWorkloads, "violet", "◫", "daemonsets")}
-      ${renderMetric("WARNINGS", `${warnings}`, "Across events and node health", ratio(Math.max(0, 4 - warnings), 4), warnings ? "amber" : "mint", "⚠", "events")}
-    </div>
-    <div class="section-header"><div><h2>Cluster activity</h2><p>A quick look at your resources and recent activity.</p></div>
-      <div class="dashboard-controls"><span class="last-updated">Updated ${escapeHtml(refreshTime)}</span></div>
-    </div>
-    <div class="overview-grid">
-      <section class="panel resource-overview"><div class="panel-heading"><div><h3>Workload health</h3><p>Resource readiness by type</p></div><button class="subtle-button" data-view="deployments">View deployments ${icon("arrow")}</button></div>
-        ${[
-          ["Deployments", snapshot.deployments.length, snapshot.deployments.filter(r => (r.status?.readyReplicas ?? 0) >= (r.spec?.replicas ?? 0)).length, "▥"],
-          ["StatefulSets", snapshot.statefulsets.length, snapshot.statefulsets.filter(r => (r.status?.readyReplicas ?? 0) >= (r.spec?.replicas ?? 0)).length, "▣"],
-          ["DaemonSets", snapshot.daemonsets.length, snapshot.daemonsets.filter(r => (r.status?.numberReady ?? 0) >= (r.status?.desiredNumberScheduled ?? 0)).length, "⠿"],
-        ].map(([label, total, healthy, glyph]) => `<div class="workload-row"><span class="workload-glyph">${glyph}</span><span class="workload-name">${label}</span><div class="workload-bar"><span style="width:${ratio(Number(healthy), Number(total))}%"></span></div><span class="workload-count">${healthy}/${total} ready</span><span class="workload-check ${Number(healthy) === Number(total) ? "" : "partial"}">${Number(healthy) === Number(total) ? "✓" : "!"}</span></div>`).join("")}
-        <div class="panel-divider"></div><div class="mini-stats"><div><span class="mini-label">TOTAL PODS</span><strong>${pods.length}</strong></div><div><span class="mini-label">RUNNING</span><strong class="text-green">${running}</strong></div><div><span class="mini-label">PENDING</span><strong class="text-amber">${pods.filter(p => p.status?.phase === "Pending").length}</strong></div><div><span class="mini-label">RESTARTS</span><strong>${pods.reduce((n, p) => n + (p.status?.containerStatuses ?? []).reduce((x: number, c: any) => x + c.restartCount, 0), 0)}</strong></div></div>
-      </section>
-      <section class="panel events-panel"><div class="panel-heading"><div><h3>Recent events</h3><p>Latest activity across the cluster</p></div><button class="subtle-button" data-view="events">All events ${icon("arrow")}</button></div>
-        <div class="events-list">${[...snapshot.events].sort((a, b) => Date.parse(b.lastTimestamp ?? "") - Date.parse(a.lastTimestamp ?? "")).slice(0, 4).map(e => `<div class="event-row"><span class="event-marker ${e.type === "Warning" ? "warn" : ""}">${e.type === "Warning" ? "!" : "✓"}</span><div class="event-copy"><strong>${escapeHtml(e.reason)} <span>${escapeHtml(e.involvedObject?.name)}</span></strong><p>${escapeHtml(e.message)}</p><small>${escapeHtml(namespace(e))} · ${escapeHtml(ageDate(e.lastTimestamp ?? ""))}</small></div><span class="event-count">${e.count && e.count > 1 ? `×${e.count}` : ""}</span></div>`).join("")}</div>
-      </section>
-    </div>
-  </div>`;
+/** Stops an active split drag session, if any. */
+function stopTerminalSplitDrag(): void {
+  draggingTerminalSplit = false;
+  document.body.classList.remove("is-resizing-terminal");
 }
 
-function filteredResources(key: ResourceKey): Resource[] {
-  const def = getDef(key);
-  let list = snapshot[key] ?? [];
-  if (def.namespaced && settings.namespace !== "All namespaces") list = list.filter(r => r.metadata.namespace === settings.namespace);
-  const query = search.trim().toLowerCase();
-  if (query) list = list.filter(r => [r.metadata.name, namespace(r), ...def.columns.map(column => column.value(r))].join(" ").toLowerCase().includes(query));
-  const column = sort.column === "Name" ? (r: Resource) => r.metadata.name : def.columns.find(c => c.label === sort.column)?.value ?? ((r: Resource) => r.metadata.name);
-  return [...list].sort((a, b) => {
-    const x = column(a), y = column(b);
-    return compareValues(x, y) * sort.direction;
+/** Stops an active table-column resize session, if any. */
+function stopTableColumnDrag(): void {
+  tableColumnDrag = null;
+  document.body.classList.remove("is-resizing-columns");
+}
+
+/** Collects visible header widths so resizing starts from exactly what the user sees. */
+function tableHeaderWidths(table: HTMLTableElement): number[] {
+  return [...table.querySelectorAll<HTMLTableCellElement>("thead th")].map(cell => cell.getBoundingClientRect().width);
+}
+
+/** Saved widths are reused when shape-compatible; otherwise current rendered widths are used. */
+function startColumnWidths(key: ResourceKey, table: HTMLTableElement): number[] {
+  const headerCount = table.querySelectorAll("thead th").length;
+  const saved = tableColumnWidths[key] ?? [];
+  const completeSaved = saved.length === headerCount && saved.every(width => Number.isFinite(width) && width > 0);
+  if (completeSaved) return saved.map(width => Math.round(width));
+  return tableHeaderWidths(table).map(width => Math.round(width));
+}
+
+/** True when the index points to the last column (no right-side neighbor to shrink). */
+function isLastColumn(widths: number[], index: number): boolean {
+  return index >= widths.length - 1;
+}
+
+/** Computes resized widths for one drag step while keeping every column above a minimum width. */
+function resizeWidths(widths: number[], index: number, delta: number): number[] {
+  const next = [...widths];
+  if (isLastColumn(next, index)) {
+    next[index] = Math.max(TABLE_COLUMN_MIN, next[index] + delta);
+    return next;
+  }
+  const leftStart = next[index];
+  const rightStart = next[index + 1];
+  let applied = delta;
+  let left = leftStart + applied;
+  let right = rightStart - applied;
+  if (left < TABLE_COLUMN_MIN) {
+    applied = TABLE_COLUMN_MIN - leftStart;
+    left = TABLE_COLUMN_MIN;
+    right = rightStart - applied;
+  }
+  if (right < TABLE_COLUMN_MIN) {
+    applied = rightStart - TABLE_COLUMN_MIN;
+    right = TABLE_COLUMN_MIN;
+    left = leftStart + applied;
+  }
+  next[index] = left;
+  next[index + 1] = right;
+  return next;
+}
+
+/** Applies the current column widths directly to the rendered table for smooth dragging. */
+function paintTableColumnWidths(key: ResourceKey, widths: number[]): void {
+  const table = query<HTMLTableElement>(`.resource-table-grid[data-resource-key="${escapeSelector(key)}"]`);
+  if (!table) return;
+  const total = widths.reduce((sum, width) => sum + (Number.isFinite(width) ? width : 0), 0);
+  if (total > 0) table.style.width = `${Math.round(total)}px`;
+  const cols = [...table.querySelectorAll<HTMLTableColElement>("colgroup col")];
+  cols.forEach((col, index) => {
+    const width = widths[index];
+    col.style.width = Number.isFinite(width) && width > 0 ? `${Math.round(width)}px` : "";
+  });
+  const handles = [...table.querySelectorAll<HTMLElement>(".table-col-resizer")];
+  handles.forEach((handle, index) => {
+    const width = widths[index];
+    if (Number.isFinite(width) && width > 0) handle.setAttribute("aria-valuenow", String(Math.round(width)));
   });
 }
-function renderResourceTable(key: ResourceKey): string {
-  const def = getDef(key), rows = filteredResources(key);
-  const columns = [{ label: "Name", value: (r: Resource) => r.metadata.name }, ...def.columns];
-  return `<div class="page-content resource-page">
-    <div class="page-title-row"><div><div class="eyebrow">${escapeHtml(def.group.toUpperCase())} <span>·</span> RESOURCE BROWSER</div><h1>${escapeHtml(def.label)}</h1><p class="page-subtitle">Inspect and manage ${escapeHtml(def.label.toLowerCase())} in your cluster.</p></div><div class="page-title-actions"><span class="resource-count">${loadingCollections.has(key) ? "Loading…" : `${rows.length} ${rows.length === 1 ? "resource" : "resources"}`}</span><button class="button secondary" data-action="refresh">${icon("refresh")} Refresh</button></div></div>${notice ? `<div class="notice"><span class="notice-icon">i</span><span>${escapeHtml(notice)}</span></div>` : ""}
-    <div class="table-toolbar"><div class="table-context"><span class="context-symbol">${escapeHtml(def.icon)}</span><span>${escapeHtml(selectedContext)}</span><span class="crumb-sep">/</span><span>${escapeHtml(settings.namespace)}</span></div><div class="table-tools"><span class="data-count">${rows.length} items</span></div></div>
-    <div class="table-shell"><table><thead><tr>${columns.map(c => `<th><button class="sort-button" data-sort="${escapeHtml(c.label)}">${escapeHtml(c.label)} ${sort.column === c.label ? `<span>${sort.direction > 0 ? "↑" : "↓"}</span>` : ""}</button></th>`).join("")}<th class="action-header"></th></tr></thead><tbody>
-      ${rows.length ? rows.map(r => `<tr class="resource-row" data-resource="${escapeHtml(identity(r))}" tabindex="0" role="button" aria-label="Inspect ${escapeHtml(r.kind)} ${escapeHtml(r.metadata.name)}">${columns.map((c, i) => {
-        const val = c.value(r);
-        if (i === 0) return `<td><div class="name-cell"><span class="resource-avatar ${def.group.toLowerCase().replace(/ /g, "-")}">${escapeHtml(def.icon)}</span><span><strong>${escapeHtml(val)}</strong>${r.metadata.namespace ? `<small>${escapeHtml(r.metadata.namespace)}</small>` : ""}</span><span class="name-actions"><button class="name-action" data-action="open-resource" data-id="${escapeHtml(identity(r))}" aria-label="Open details for ${escapeHtml(val)}">Details</button>${logKinds.has(key) ? `<button class="name-action" data-action="open-logs" data-id="${escapeHtml(identity(r))}" data-log-opener="row:${escapeHtml(identity(r))}" aria-label="Open logs for ${escapeHtml(val)}">Logs</button>` : ""}</span></div></td>`;
-        if (c.label === "Status" || c.label === "Type" && key === "events") return `<td><span class="status-cell ${statusTone(val)}"><i></i>${escapeHtml(val)}</span></td>`;
-        if (key === "pods" && c.label === "Containers") return `<td><span class="container-squares">${(r.spec?.containers ?? []).map((container: any, j: number) => `<i class="${r.status?.containerStatuses?.[j]?.ready ? "ready" : "not-ready"}" title="${escapeHtml(container.name)}"></i>`).join("")}<small>${escapeHtml(val)}</small></span></td>`;
-        if (c.label === "Labels") return `<td><button class="label-summary" data-labels="${escapeHtml(JSON.stringify(r.metadata.labels ?? {}))}" data-name="${escapeHtml(r.metadata.name)}">${escapeHtml(val)}</button></td>`;
-        return `<td class="${/^\d+$/.test(val) ? "numeric-cell" : ""}">${escapeHtml(val || "-")}</td>`;
-      }).join("")}<td><button class="row-more" aria-label="Inspect ${escapeHtml(r.metadata.name)}">${icon("chevron")}</button></td></tr>`).join("") : `<tr><td colspan="${columns.length + 1}"><div class="empty-state"><span>⌕</span><strong>No resources found</strong><p>Try changing the namespace or search term.</p><button data-action="clear-search" class="subtle-button">Clear search</button></div></td></tr>`}
-    </tbody></table></div><div class="table-foot"><span>Showing <strong>${rows.length}</strong> of ${snapshot[key].length} resources</span><span>Synced ${escapeHtml(refreshTime)}</span></div>
-  </div>`;
+
+/** Updates one column width (and maybe its neighbor) then repaints the table without a full render. */
+function applyColumnDelta(key: ResourceKey, index: number, startWidths: number[], delta: number): void {
+  const next = resizeWidths(startWidths, index, delta).map(width => Math.round(width));
+  tableColumnWidths[key] = next;
+  paintTableColumnWidths(key, next);
 }
 
-function renderInspector(): string {
-  if (!inspector) return "";
-  const r = inspector, labels = Object.entries(r.metadata.labels ?? {}).slice(0, 8);
-  return `<div class="inspector-backdrop"><aside class="inspector" role="dialog" aria-modal="true" aria-label="${escapeHtml(r.kind)} inspector">
-    <header class="inspector-header"><div><div class="eyebrow">RESOURCE INSPECTOR</div><h2>${escapeHtml(r.kind)}</h2></div><button class="icon-button" data-action="close-inspector" aria-label="Close inspector">${icon("close")}</button></header>
-    <div class="inspector-identity"><span class="resource-avatar large">${escapeHtml(getDef(view as ResourceKey)?.icon ?? "◉")}</span><div><strong>${escapeHtml(r.metadata.name)}</strong><span>${escapeHtml(identity(r))}</span></div><button class="icon-button small" data-action="copy-name" title="Copy resource name" aria-label="Copy resource name">${icon("copy")}</button></div>
-    <div class="inspector-facts"><div><span>NAMESPACE</span><strong>${escapeHtml(r.metadata.namespace ?? "Cluster-scoped")}</strong></div><div><span>STATUS</span><strong class="${statusTone(rowStatus(r, (view as ResourceKey)))}">${escapeHtml(rowStatus(r, view as ResourceKey))}</strong></div><div><span>AGE</span><strong>${escapeHtml(age(r))}</strong></div><div><span>LABELS</span><strong>${Object.keys(r.metadata.labels ?? {}).length}</strong></div></div>
-    ${r.kind === "Event" ? `<section class="inspector-section"><h3>Event message</h3><p class="event-message">${escapeHtml(r.message ?? "-")}</p></section>` : ""}
-    <section class="inspector-section"><div class="inspector-section-title"><h3>Labels</h3><span>${Object.keys(r.metadata.labels ?? {}).length}</span></div>${labels.length ? `<div class="inspector-labels">${labels.map(([k, v]) => `<div><span>${escapeHtml(k)}</span><strong>${escapeHtml(v || '""')}</strong></div>`).join("")}</div>` : `<p class="muted-empty">No labels on this resource.</p>`}${Object.keys(r.metadata.labels ?? {}).length > 8 ? `<small class="muted-empty">Showing 8 of ${Object.keys(r.metadata.labels ?? {}).length} labels</small>` : ""}</section>
-    <section class="inspector-section manifest-section"><div class="inspector-section-title"><h3>Manifest</h3><button class="subtle-button" data-action="copy-manifest">${icon("copy")} Copy YAML</button></div><pre class="yaml-manifest">${highlightYaml(manifestYaml(r))}</pre></section>
-    <footer class="inspector-footer">${logKinds.has(view as ResourceKey) ? `<button class="button secondary" data-action="open-logs-inspector" data-log-opener="inspector" aria-label="Open logs for ${escapeHtml(r.metadata.name)}">View logs</button>` : ""}<button class="button secondary" data-action="copy-name">${icon("copy")} Copy resource name</button><button class="button primary" data-action="copy-manifest">${icon("copy")} Copy manifest</button></footer>
-  </aside></div>`;
+/** Most lines the command box may show before it scrolls. */
+const TERMINAL_INPUT_MAX_LINES = 2;
+
+/**
+ * Sizes the command box to its content: one line normally, two once the text wraps, never more.
+ * Beyond two lines the box scrolls instead of growing.
+ */
+function fitTerminalInput(): void {
+  const box = query<HTMLTextAreaElement>("#terminal-input");
+  if (!box) return;
+  box.style.height = "auto";
+  const line = parseFloat(getComputedStyle(box).lineHeight) || box.clientHeight;
+  const chrome = box.offsetHeight - box.clientHeight;
+  const lines = Math.min(TERMINAL_INPUT_MAX_LINES, Math.max(1, Math.round(box.scrollHeight / line)));
+  box.style.height = `${lines * line + chrome}px`;
 }
 
-function renderSettings(): string {
-  return `<div class="page-content settings-page"><div class="page-title-row"><div><div class="eyebrow">PREFERENCES <span>·</span> WORKSPACE</div><h1>Settings</h1><p class="page-subtitle">Configure how Orbita connects to your Kubernetes environment.</p></div><div class="page-title-actions"><button class="button secondary" data-view="dashboard">${icon("chevron")} Back to cluster</button></div></div>
-    <div class="settings-layout"><div class="settings-main">
-      <section class="panel settings-card"><div class="settings-card-title"><div class="settings-icon">⌘</div><div><h2>Kubeconfig discovery</h2><p>Choose where Orbita searches for Kubernetes configuration files.</p></div></div><form id="settings-form"><label class="field-label" for="search-path">Search path</label><div class="input-with-icon"><span>⌁</span><input id="search-path" value="${escapeHtml(settings.searchPath)}" placeholder="~/.kube" required></div><small class="field-help">A file or directory. Leave the default to use ~/.kube/config and KUBECONFIG.</small><div class="form-actions"><button type="button" class="button secondary" data-action="cancel-settings">Cancel</button><button type="button" class="button primary" data-action="save-settings">Save changes</button></div>${settingsSaved ? `<p class="inline-success" id="settings-success">✓ Settings saved and context discovery refreshed.</p>` : ""}</form></section>
-      <section class="panel settings-card"><div class="settings-card-title"><div class="settings-icon lilac">⌑</div><div><h2>Saved kubeconfigs</h2><p>Configurations pasted into Orbita are stored locally in your app data.</p></div><button class="button secondary small-button" data-action="add-config">${icon("plus")} Add kubeconfig</button></div>
-        ${settings.savedConfigs.length ? settings.savedConfigs.map((c: {id:string;name:string;yaml:string}) => `<div class="saved-config"><div class="saved-config-title"><div><strong>${escapeHtml(c.name)}</strong><span>Saved configuration</span></div><button class="text-button danger-text" data-action="remove-config" data-id="${escapeHtml(c.id)}">Remove</button></div><textarea data-config="${escapeHtml(c.id)}" aria-label="Kubeconfig YAML for ${escapeHtml(c.name)}">${escapeHtml(c.yaml)}</textarea><div class="saved-config-actions"><span>YAML configuration</span><button class="button secondary" data-action="save-config" data-id="${escapeHtml(c.id)}">Save kubeconfig</button></div></div>`).join("") : `<div class="empty-config"><span>⌘</span><strong>No saved kubeconfigs</strong><p>Add a pasted configuration to keep it available across sessions.</p></div>`}
-      </section>
-      <section class="panel settings-card"><div class="settings-card-title"><div class="settings-icon mint-icon">◐</div><div><h2>Appearance</h2><p>Make the workspace yours.</p></div></div><div class="appearance-row"><div><strong>Theme</strong><span>Choose a light or dark interface.</span></div><div class="segmented"><button data-theme="light" class="${settings.theme === "light" ? "selected" : ""}">☼ Light</button><button data-theme="dark" class="${settings.theme === "dark" ? "selected" : ""}">◐ Dark</button></div></div><div class="appearance-row"><div><strong>Density</strong><span>Adjust spacing in resource tables.</span></div><select id="settings-density" class="settings-select"><option value="cozy" ${settings.density === "cozy" ? "selected" : ""}>Cozy</option><option value="normal" ${settings.density === "normal" ? "selected" : ""}>Normal</option><option value="compact" ${settings.density === "compact" ? "selected" : ""}>Compact</option></select></div></section>
-    </div><aside class="settings-aside"><section class="panel side-settings-card"><span class="settings-aside-icon">◉</span><h3>CLI tools</h3><p>Orbita uses local command-line tools when available.</p>${["kubectl", "Docker", "kind"].map(x => {
-      const detected = cli[x.toLowerCase() as keyof typeof cli];
-      return `<div class="tool-row"><span class="tool-status-dot ${detected ? "up" : ""}"></span><strong>${x}</strong><span>${cliChecking ? "Checking availability" : detected ? "Detected" : "Not detected"}</span></div><small class="tool-path">${escapeHtml(cliPaths[x.toLowerCase()] ?? (cliChecking ? "Checking availability" : "Executable not found on PATH"))}</small>`;
-    }).join("")}</section><section class="panel help-card"><span>✧</span><strong>Need a hand?</strong><p>Install kubectl to connect Orbita to a Kubernetes cluster.</p><button data-view="about" class="subtle-button">About Orbita ${icon("arrow")}</button></section></aside></div></div>`;
-}
-function renderAbout(): string {
-  return `<div class="page-content about-page"><div class="page-title-row"><div><div class="eyebrow">ORBITA <span>·</span> INFORMATION</div><h1>About ${escapeHtml(about.name)}</h1><p class="page-subtitle">A focused workspace for understanding your Kubernetes clusters.</p></div></div><section class="panel about-card"><div class="about-logo">${icon("cluster")}</div><span class="about-wordmark">${escapeHtml(about.name.toLowerCase())}</span><span class="about-version">VERSION ${escapeHtml(about.version)}</span><p>${escapeHtml(about.description)}</p><div class="about-meta"><div><span>AUTHOR</span><strong>${escapeHtml(about.author)}</strong></div>${about.email ? `<div><span>EMAIL</span><strong>${escapeHtml(about.email)}</strong></div>` : ""}<div><span>REPOSITORY</span><strong>${escapeHtml(about.repository)}</strong></div></div><button class="button primary" data-view="dashboard">${icon("chevron")} Back to cluster</button></section></div>`;
-}
-
-function renderDialog(): string {
-  if (!dialog) return "";
-  return `<div class="dialog-backdrop"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title"><header><div><div class="eyebrow">CLUSTER CONFIGURATION</div><h2 id="dialog-title">Add kubeconfig</h2><p>Paste a kubeconfig YAML document to add its contexts to Orbita.</p></div><button class="icon-button" data-action="close-dialog" aria-label="Close dialog">${icon("close")}</button></header><form id="add-config-form"><label class="field-label" for="new-config-name">Configuration name</label><input class="dialog-input" id="new-config-name" placeholder="My cluster" value="New cluster"><label class="field-label" for="new-config-yaml">Kubeconfig YAML</label><textarea id="new-config-yaml" placeholder="apiVersion: v1&#10;kind: Config&#10;contexts:&#10;  - name: my-context" required></textarea><p class="dialog-error" id="config-error" role="alert"></p><footer><button class="button secondary" type="button" data-action="close-dialog">Cancel</button><button type="button" class="button primary" data-action="validate-add-config">Validate &amp; add</button></footer></form></section></div>`;
-}
-
-function renderTerminal(): string {
-  if (!terminalOpen) return "";
-  const off = !cli.kubectl ? "disabled" : "";
-  return `<div class="terminal-backdrop"><section class="panel terminal-panel ${!cli.kubectl ? "terminal-disabled" : ""} ${terminalExpanded ? "terminal-expanded" : ""}" role="dialog" aria-modal="true" aria-labelledby="terminal-title">
-    <div class="panel-heading terminal-heading"><div><span class="terminal-icon">&gt;_</span><div><h3 id="terminal-title">Kubectl terminal</h3><p>Run commands against <strong>${escapeHtml(selectedContext)}</strong></p></div></div><div class="terminal-actions"><span class="terminal-online"><i></i>Context bound</span><button class="icon-button small" data-action="toggle-terminal" aria-label="${terminalExpanded ? "Collapse" : "Expand"} output" ${off}>⤢</button><button class="icon-button small" data-action="clear-output" aria-label="Clear output" ${off}>⌫</button><button class="icon-button small" data-action="clear-history" aria-label="Clear history" ${off}>⌁</button><button class="icon-button small" data-action="close-terminal" aria-label="Close terminal">${icon("close")}</button></div></div>
-    <div class="terminal-body"><div class="terminal-command-pane"><div class="terminal-pane-title">COMMAND HISTORY <button data-action="clear-history" aria-label="Clear command history" ${off}>Clear</button></div><div class="command-history">${terminalHistory.length ? terminalHistory.map(h => `<button class="history-entry" data-command="${escapeHtml(h.command)}"><span>$</span> ${escapeHtml(h.command)}<small>${escapeHtml(h.status)}</small></button>`).join("") : `<div class="history-empty">Your recent commands will appear here.<br><code>kubectl get pods -A</code></div>`}</div><form id="terminal-form" class="terminal-form"><span>$</span><input id="terminal-input" value="${escapeHtml(terminalInput)}" placeholder="kubectl get pods" aria-label="Kubectl command" autocomplete="off" ${off}><button type="button" data-action="run-terminal" aria-label="Run command" ${off}>Run&nbsp; ↗</button></form></div>
-      <div class="terminal-output-pane"><div class="terminal-pane-title">OUTPUT <span class="output-context">${escapeHtml(selectedContext)}</span></div><div class="terminal-output" id="terminal-output" role="log" aria-live="polite" aria-label="Terminal output">${terminalStatus !== null ? `${terminalOutput ? `<pre class="terminal-stdout">${highlightYaml(terminalOutput)}</pre>` : ""}${terminalStderr ? `<pre class="terminal-stderr">${escapeHtml(terminalStderr)}</pre>` : ""}<div class="terminal-exit ${terminalStatus === "0" ? "success" : "failure"}">Process exited with code ${escapeHtml(terminalStatus)}</div>` : `<div class="output-placeholder"><span>⌁</span><strong>Ready for your first command</strong><small>Output will appear here</small></div>`}</div></div></div>
-    ${!cli.kubectl ? `<div class="terminal-overlay"><div class="terminal-overlay-card"><span>⌘</span><strong>kubectl not detected</strong><p>Install kubectl and restart Orbita to enable the terminal. All other cluster views remain available in demo mode.</p></div></div>` : ""}
-  </section></div>`;
-}
-
-function renderLogs(): string {
-  if (!logs) return "";
-  const body = logs.state === "loading" ? "Loading logs…" : logs.state === "empty" ? "No log output was returned." : logs.body;
-  return `<aside class="logs-drawer" role="dialog" aria-modal="false" aria-labelledby="logs-title"><header><h3 id="logs-title">${escapeHtml(logs.title)}</h3><button class="icon-button small" data-action="close-logs" aria-label="Close logs">${icon("close")}</button></header><pre class="logs-output ${logs.state === "error" ? "logs-error" : ""}" role="log" aria-live="polite" aria-label="Log output">${escapeHtml(body)}</pre></aside>`;
-}
-
-function render(): void {
-  document.documentElement.dataset.theme = settings.theme;
-  document.documentElement.dataset.density = settings.density;
-  root.innerHTML = `<div class="app-shell">${renderSidebar()}<main class="main-area">${renderHeader()}${view === "dashboard" ? renderDashboard() : view === "settings" ? renderSettings() : view === "about" ? renderAbout() : renderResourceTable(view)}${renderInspector()}${renderDialog()}${renderTerminal()}${renderLogs()}${renderStatusBar()}</main></div>`;
-  for (const el of root.querySelectorAll<HTMLElement>(".command-history, .terminal-output")) el.scrollTop = el.scrollHeight;
-}
-
+/**
+ * Navigates to a page. Closes the inspector, clears search and sort, and lazily loads the collection
+ * the first time a resource view is visited. Unknown names are ignored.
+ * @param next - `"dashboard"`, `"settings"`, `"about"` or a resource key.
+ */
 function setView(next: string): void {
-  if (next === "settings" || next === "about" || next === "dashboard" || definitions.some(d => d.key === next)) {
-    view = next as View; inspector = null; search = ""; sort = { column: "Name", direction: 1 }; render();
-    if (definitions.some(d => d.key === next) && !loaded.has(next as ResourceKey)) {
-      if (bridged()) void loadRealResources(next as ResourceKey);
-      else { loaded.add(next as ResourceKey); render(); }
+  if (isAppViewName(next)) {
+    view = next; inspector = null; search = ""; sort = { column: "Name", direction: 1 }; render();
+    if (isResourceView(next) && !loaded.has(next)) {
+      if (bridged()) void loadRealResources(next);
+      else { loaded.add(next); render(); }
     }
   }
 }
+/** Resets all data to the demo fixtures and the default banner (demo-mode refresh). */
 function updateSnapshot(): void {
   snapshot = { ...demo };
   loaded = new Set(initialKeys);
@@ -305,9 +356,15 @@ function updateSnapshot(): void {
   notice = `Connected to ${selectedContext} · Showing deterministic demo data`;
 }
 
+/**
+ * Fetches one collection from the selected context and stores it in `snapshot`.
+ * Failures are shown in the notice and the demo data for that collection is kept.
+ * @param key - Collection to fetch.
+ */
 async function loadRealResources(key: ResourceKey): Promise<void> {
   if (!bridged() || !selectedContext) return;
   loadingCollections.add(key);
+  snapshot[key] = [];
   notice = `Loading ${getDef(key).label.toLowerCase()} from ${selectedContext}…`;
   render();
   try {
@@ -316,9 +373,25 @@ async function loadRealResources(key: ResourceKey): Promise<void> {
       namespace: getDef(key).namespaced ? settings.namespace : "All namespaces",
     });
     snapshot[key] = resources;
+    if (key === "nodes" || key === "pods") {
+      try {
+        const metrics = await call<Resource[]>("get_resource_metrics", {
+          kind: key,
+          namespace: key === "pods" ? settings.namespace : "All namespaces",
+        });
+        if (key === "nodes") mergeNodeMetrics(metrics);
+        else mergePodMetrics(metrics);
+      } catch (error) {
+        notice = `Connected to ${selectedContext} · Live cluster data · ${metricsErrorLabel(key)} unavailable (${String(error)})`;
+      }
+    }
     loaded.add(key);
-    notice = `Connected to ${selectedContext} · Live cluster data`;
+    if (!notice.includes("unavailable")) {
+      notice = `Connected to ${selectedContext} · Live cluster data`;
+    }
   } catch (error) {
+    snapshot[key] = demo[key];
+    loaded.add(key);
     notice = `Could not load ${getDef(key).label.toLowerCase()} from ${selectedContext}: ${String(error)} · Showing demo data`;
   } finally {
     loadingCollections.delete(key);
@@ -326,12 +399,47 @@ async function loadRealResources(key: ResourceKey): Promise<void> {
   }
 }
 
+/** Human-friendly name for node/pod metrics fetch errors. */
+function metricsErrorLabel(kind: "nodes" | "pods"): string {
+  return kind === "nodes" ? "Node metrics" : "Pod metrics";
+}
+
+/** Merges node metrics-server usage into the current node snapshot by resource name. */
+function mergeNodeMetrics(metrics: Resource[]): void {
+  const byName = new Map(metrics.map(item => [item.metadata?.name ?? "", item]));
+  snapshot.nodes = snapshot.nodes.map(node => {
+    const metric = byName.get(node.metadata.name);
+    if (!metric?.usage) return node;
+    return {
+      ...node,
+      metrics: { ...(node.metrics ?? {}), usage: metric.usage },
+    };
+  });
+}
+
+/** Merges pod metrics-server container usage into the current pod snapshot by namespace/name identity. */
+function mergePodMetrics(metrics: Resource[]): void {
+  const byIdentity = new Map(metrics.map(item => [`${item.metadata?.namespace ?? ""}/${item.metadata?.name ?? ""}`, item]));
+  snapshot.pods = snapshot.pods.map(pod => {
+    const metric = byIdentity.get(`${pod.metadata.namespace ?? ""}/${pod.metadata.name}`);
+    if (!Array.isArray(metric?.containers)) return pod;
+    return {
+      ...pod,
+      metrics: { ...(pod.metrics ?? {}), containers: metric.containers },
+    };
+  });
+}
+
+/**
+ * Fetches the dashboard collections for the selected context in parallel.
+ * Collections that fail keep their demo data and are listed in the notice.
+ */
 async function loadRealSnapshot(): Promise<void> {
   if (!bridged() || !selectedContext) return;
-  snapshot = { ...demo };
+  snapshot = emptySnapshot();
   loaded.clear();
   const initial: ResourceKey[] = ["namespaces", "nodes", "pods", "deployments", "daemonsets", "statefulsets", "events"];
-  initial.forEach(key => loadingCollections.add(key));
+  loadingCollections = new Set(initial);
   notice = `Connecting to ${selectedContext}…`;
   render();
   const results = await Promise.allSettled(initial.map(key => call<Resource[]>("get_resources", {
@@ -345,17 +453,48 @@ async function loadRealSnapshot(): Promise<void> {
       snapshot[key] = result.value;
       loaded.add(key);
     } else {
+      snapshot[key] = demo[key];
+      loaded.add(key);
       errors.push(`${getDef(key).label}: ${String(result.reason)}`);
     }
     loadingCollections.delete(key);
   });
+  const metricFetches: Array<{ kind: "nodes" | "pods"; promise: Promise<Resource[]> }> = [];
+  if (loaded.has("nodes")) {
+    metricFetches.push({
+      kind: "nodes",
+      promise: call<Resource[]>("get_resource_metrics", { kind: "nodes", namespace: "All namespaces" }),
+    });
+  }
+  if (loaded.has("pods")) {
+    metricFetches.push({
+      kind: "pods",
+      promise: call<Resource[]>("get_resource_metrics", { kind: "pods", namespace: settings.namespace }),
+    });
+  }
+  const metricErrors: string[] = [];
+  const metricResults = await Promise.allSettled(metricFetches.map(fetch => fetch.promise));
+  metricResults.forEach((result, index) => {
+    const kind = metricFetches[index].kind;
+    if (result.status === "fulfilled") {
+      if (kind === "nodes") mergeNodeMetrics(result.value);
+      else mergePodMetrics(result.value);
+      return;
+    }
+    metricErrors.push(`${metricsErrorLabel(kind)}: ${String(result.reason)}`);
+  });
   refreshTime = "Just now";
-  notice = errors.length
+  const baseNotice = errors.length
     ? `Some live collections were unavailable (${errors.join("; ")}). Showing demo data for those resources.`
     : `Connected to ${selectedContext} · Live cluster data`;
+  notice = metricErrors.length ? `${baseNotice} Metrics summary unavailable (${metricErrors.join("; ")}).` : baseNotice;
   render();
 }
 
+/**
+ * Asks the host for available Kubernetes contexts, picks the selected one (the saved choice if still present),
+ * persists it and loads the dashboard data. Discovery errors fall back to demo data with an explanatory notice.
+ */
 async function loadRealContexts(): Promise<void> {
   if (!bridged()) return;
   try {
@@ -366,7 +505,7 @@ async function loadRealContexts(): Promise<void> {
       return;
     }
     contextNames = [...result.contexts].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-    snapshot = { ...demo };
+    snapshot = emptySnapshot();
     loaded.clear();
     selectedContext = result.contexts.includes(settings.selectedContext)
       ? settings.selectedContext
@@ -380,25 +519,38 @@ async function loadRealContexts(): Promise<void> {
   }
 }
 
+/**
+ * Reloads data for the current page: resets demo data in demo mode, otherwise refetches the dashboard
+ * collections or the one collection being viewed.
+ */
 async function refreshCurrentView(): Promise<void> {
   if (!bridged()) {
     updateSnapshot();
     render();
   } else if (view === "dashboard") {
     await loadRealSnapshot();
-  } else if (definitions.some(d => d.key === view)) {
-    await loadRealResources(view as ResourceKey);
+  } else if (isResourceView(view)) {
+    await loadRealResources(view);
   }
 }
 
-root.addEventListener("click", async event => {
-  const target = event.target as HTMLElement;
+/**
+ * Delegated click handler for the whole app. Resolves the nearest element carrying a `data-*` hook
+ * (`data-view`, `data-sort`, `data-resource`, `data-theme`, `data-command` or `data-action`) and runs the
+ * matching state change. Clicks on modal backdrops close that modal.
+ */
+getRoot().addEventListener("click", async event => {
+  const target = targetOf<HTMLElement>(event);
   if (target.classList.contains("inspector-backdrop")) { inspector = null; render(); return; }
   if (target.classList.contains("dialog-backdrop")) { dialog = null; render(); return; }
-  if (target.classList.contains("terminal-backdrop")) { closeTerminal(); return; }
-  const btn = target.closest<HTMLElement>("[data-action], [data-view], [data-sort], [data-resource], [data-theme], [data-command]");
+  const btn = closestTo(target, "[data-action], [data-view], [data-sort], [data-resource], [data-theme], [data-command]");
   if (!btn) return;
   if (btn.dataset.view) { setView(btn.dataset.view); return; }
+  if (btn.dataset.action === "toggle-sidebar") {
+    sidebarCollapsed = !sidebarCollapsed;
+    localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0");
+    render(); return;
+  }
   if (btn.dataset.action === "toggle-group") {
     const group = btn.dataset.group!;
     collapsed.has(group) ? collapsed.delete(group) : collapsed.add(group); render(); return;
@@ -413,18 +565,23 @@ root.addEventListener("click", async event => {
   }
   if (btn.dataset.theme) { settings.theme = btn.dataset.theme; saveSettings(); render(); return; }
   if (btn.dataset.command) {
-    terminalInput = btn.dataset.command; render(); document.querySelector<HTMLInputElement>("#terminal-input")?.focus(); return;
+    terminalInput = btn.dataset.command; render(); query<HTMLTextAreaElement>("#terminal-input")?.focus(); return;
   }
   switch (btn.dataset.action) {
     case "refresh": void refreshCurrentView(); break;
     case "toggle-theme": settings.theme = settings.theme === "dark" ? "light" : "dark"; saveSettings(); render(); break;
     case "toggle-terminal": terminalExpanded = !terminalExpanded; render(); break;
+    case "toggle-format":
+      terminalFormat = terminalFormat === "text" ? "json" : "text";
+      render();
+      if (lastCommand) void runTerminal(lastCommand, true);
+      break;
     case "clear-output": terminalOutput = ""; terminalStatus = null; render(); break;
     case "clear-history": terminalHistory = []; render(); break;
     case "add-config": dialog = "add-config"; render(); break;
     case "close-dialog": dialog = null; render(); break;
     case "close-inspector": inspector = null; render(); break;
-    case "open-terminal": terminalOpen = true; render(); document.querySelector<HTMLElement>(cli.kubectl ? "#terminal-input" : "[data-action=close-terminal]")?.focus(); break;
+    case "open-terminal": terminalOpen = true; render(); query<HTMLElement>(cli.kubectl ? "#terminal-input" : "[data-action=close-terminal]")?.focus(); break;
     case "close-terminal": closeTerminal(); break;
     case "close-logs": closeLogs(); break;
     case "open-resource": {
@@ -460,7 +617,7 @@ root.addEventListener("click", async event => {
       await loadRealContexts();
       break;
     case "save-config": {
-      const area = document.querySelector<HTMLTextAreaElement>(`textarea[data-config="${CSS.escape(btn.dataset.id ?? "")}"]`);
+      const area = query<HTMLTextAreaElement>(`textarea[data-config="${escapeSelector(btn.dataset.id ?? "")}"]`);
       if (area && validateKubeconfig(area.value)) {
         const entry = settings.savedConfigs.find((x: {id:string}) => x.id === btn.dataset.id);
         if (entry) {
@@ -479,54 +636,185 @@ root.addEventListener("click", async event => {
   }
 });
 
-root.addEventListener("input", event => {
-  const el = event.target as HTMLInputElement;
+/**
+ * Starts dragging the divider between command history and output panes.
+ * The body is updated live via a CSS variable; a full render is not needed while dragging.
+ */
+getRoot().addEventListener("pointerdown", event => {
+  const target = targetOf<HTMLElement>(event);
+  const handle = closestTo<HTMLElement>(target, ".table-col-resizer");
+  if (!handle) return;
+  const key = handle.dataset.resourceKey;
+  const index = Number(handle.dataset.columnIndex);
+  if (!key || !isResourceView(key) || !Number.isInteger(index)) return;
+  const table = handle.closest<HTMLTableElement>("table.resource-table-grid");
+  if (!table) return;
+  const widths = startColumnWidths(key, table);
+  if (!widths.length || index < 0 || index >= widths.length) return;
+  tableColumnDrag = { key, index, startX: event.clientX, startWidths: widths };
+  tableColumnWidths[key] = [...widths];
+  document.body.classList.add("is-resizing-columns");
+  event.preventDefault();
+});
+
+/**
+ * Starts dragging the divider between command history and output panes.
+ * The body is updated live via a CSS variable; a full render is not needed while dragging.
+ */
+getRoot().addEventListener("pointerdown", event => {
+  const target = targetOf<HTMLElement>(event);
+  if (!closestTo(target, ".terminal-splitter")) return;
+  if (!terminalOpen || !cli.kubectl) return;
+  const body = query<HTMLElement>(".terminal-body");
+  if (!body) return;
+  const rect = body.getBoundingClientRect();
+  if (rect.width <= 0) return;
+  draggingTerminalSplit = true;
+  document.body.classList.add("is-resizing-terminal");
+  event.preventDefault();
+  const pointer = event as PointerEvent;
+  const next = clampTerminalSplit(((pointer.clientX - rect.left) / rect.width) * 100);
+  if (next !== terminalSplit) terminalSplit = next;
+  paintTerminalSplit();
+});
+
+/** While resizing a table column, applies the new widths from the current pointer x-position. */
+onDocument("pointermove", event => {
+  if (!tableColumnDrag) return;
+  const delta = event.clientX - tableColumnDrag.startX;
+  applyColumnDelta(tableColumnDrag.key, tableColumnDrag.index, tableColumnDrag.startWidths, delta);
+});
+
+/** While dragging the divider, updates the split from the current pointer x-position. */
+onDocument("pointermove", event => {
+  if (!draggingTerminalSplit || !terminalOpen) return;
+  const body = query<HTMLElement>(".terminal-body");
+  if (!body) return;
+  const rect = body.getBoundingClientRect();
+  if (rect.width <= 0) return;
+  const next = clampTerminalSplit(((event.clientX - rect.left) / rect.width) * 100);
+  if (next === terminalSplit) return;
+  terminalSplit = next;
+  paintTerminalSplit();
+});
+
+/** Ends terminal divider dragging on pointer release or cancellation. */
+onDocument("pointerup", () => {
+  if (tableColumnDrag) {
+    stopTableColumnDrag();
+    render();
+  }
+  if (draggingTerminalSplit) stopTerminalSplitDrag();
+});
+onDocument("pointercancel", () => {
+  if (tableColumnDrag) {
+    stopTableColumnDrag();
+    render();
+  }
+  if (draggingTerminalSplit) stopTerminalSplitDrag();
+});
+
+/**
+ * Delegated input handler. Typing in the search box filters the table and restores the caret after the
+ * re-render; typing in the terminal box only records the text.
+ */
+getRoot().addEventListener("input", event => {
+  const el = targetOf<HTMLInputElement>(event);
   if (el.id === "search-input") {
     search = el.value;
     const start = el.selectionStart ?? search.length;
     render();
-    const input = document.querySelector<HTMLInputElement>("#search-input");
+    const input = query<HTMLInputElement>("#search-input");
     input?.focus(); input?.setSelectionRange(start, start);
-  } else if (el.id === "terminal-input") terminalInput = el.value;
+  } else if (el.id === "terminal-input") {
+    // A command is a single logical line; Enter runs it, so pasted line breaks become spaces.
+    if (/[\r\n]/.test(el.value)) el.value = el.value.replace(/\s*[\r\n]+\s*/g, " ");
+    // Shortcuts apply only while typing forward, so backspacing "kubectl " down to "kub" is not re-expanded.
+    const typing = !String((event as InputEvent).inputType ?? "").startsWith("delete");
+    const expanded = typing ? expandKubectlShortcut(el.value) : el.value;
+    if (expanded !== el.value) { el.value = expanded; el.setSelectionRange(expanded.length, expanded.length); }
+    terminalInput = el.value;
+    fitTerminalInput();
+  }
 });
-root.addEventListener("change", async event => {
-  const el = event.target as HTMLSelectElement;
+/**
+ * Delegated change handler for the selects: namespace (reloads data), density, and context
+ * (resets data and loads the new context).
+ */
+getRoot().addEventListener("change", async event => {
+  const el = targetOf<HTMLSelectElement>(event);
   if (el.id === "namespace-select") {
     settings.namespace = el.value;
     await saveSettings();
     if (view === "dashboard") void loadRealSnapshot();
-    else if (definitions.some(d => d.key === view)) void loadRealResources(view as ResourceKey);
+    else if (isResourceView(view)) void loadRealResources(view);
     else render();
   }
   if (el.id === "density-select" || el.id === "settings-density") { settings.density = el.value; await saveSettings(); render(); }
   if (el.id === "context-select") {
     selectedContext = el.value;
     settings.selectedContext = selectedContext;
-    snapshot = { ...demo };
+    snapshot = bridged() ? emptySnapshot() : { ...demo };
     loaded = new Set(bridged() ? [] : initialKeys);
     await saveSettings();
-    if (bridged()) void loadRealSnapshot(); else { notice = `Connected to ${selectedContext} · Showing deterministic demo data`; render(); }
+    if (bridged()) {
+      notice = `Connecting to ${selectedContext}…`;
+      render();
+      void loadRealSnapshot();
+    } else {
+      notice = `Connected to ${selectedContext} · Showing deterministic demo data`;
+      render();
+    }
   }
 });
-document.addEventListener("keydown", event => {
-  const target = event.target as HTMLElement;
+/**
+ * Global keyboard shortcuts: Enter opens a focused table row or runs the terminal command, Arrow keys resize
+ * a focused table-column handle or terminal pane splitter, Escape closes the top-most overlay (logs, terminal, dialog,
+ * inspector), and Tab expands `k` to `kubectl ` in the terminal box.
+ */
+onDocument("keydown", event => {
+  const target = targetOf<HTMLElement>(event);
+  if (target.classList.contains("table-col-resizer") && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    const key = target.dataset.resourceKey;
+    const index = Number(target.dataset.columnIndex);
+    if (!key || !isResourceView(key) || !Number.isInteger(index)) return;
+    const table = target.closest<HTMLTableElement>("table.resource-table-grid");
+    const baseline = table ? startColumnWidths(key, table) : (tableColumnWidths[key] ?? []);
+    if (!baseline.length || index < 0 || index >= baseline.length) return;
+    event.preventDefault();
+    const delta = event.key === "ArrowRight" ? 12 : -12;
+    const next = resizeWidths(baseline, index, delta).map(width => Math.round(width));
+    tableColumnWidths[key] = next;
+    render();
+    query<HTMLElement>(`.table-col-resizer[data-resource-key="${escapeSelector(key)}"][data-column-index="${index}"]`)?.focus();
+    return;
+  }
   if (event.key === "Enter" && target.classList.contains("resource-row")) target.click();
   if (event.key === "Enter" && target.id === "terminal-input") {
     event.preventDefault();
     void runTerminal();
   }
+  if (target.classList.contains("terminal-splitter") && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    event.preventDefault();
+    terminalSplit = clampTerminalSplit(terminalSplit + (event.key === "ArrowRight" ? 2 : -2));
+    render();
+  }
   if (event.key === "Escape") {
     if (logs) closeLogs();
-    else if (terminalOpen) closeTerminal();
+    else if (terminalOpen) return; // the terminal closes only from its close button
     else if (dialog) { dialog = null; render(); }
     else if (inspector) { inspector = null; render(); }
   }
-  if (event.key === "Tab" && target.id === "terminal-input" && (target as HTMLInputElement).value.trim() === "k") {
-    event.preventDefault(); (target as HTMLInputElement).value = "kubectl "; terminalInput = "kubectl "; (target as HTMLInputElement).setSelectionRange(8, 8);
+  if (event.key === "Tab" && target.id === "terminal-input" && (target as HTMLTextAreaElement).value.trim() === "k") {
+    event.preventDefault(); (target as HTMLTextAreaElement).value = "kubectl "; terminalInput = "kubectl "; (target as HTMLTextAreaElement).setSelectionRange(8, 8);
   }
 });
+/**
+ * Validates and saves the settings form. Requires a non-empty search path, then reruns context discovery
+ * so the new path takes effect.
+ */
 async function saveSettingsForm(): Promise<void> {
-  const input = document.querySelector<HTMLInputElement>("#search-path");
+  const input = query<HTMLInputElement>("#search-path");
   const path = input?.value.trim() ?? "";
   if (!path) {
     input?.setCustomValidity("Enter a kubeconfig search path.");
@@ -540,14 +828,18 @@ async function saveSettingsForm(): Promise<void> {
   await loadRealContexts();
 }
 
+/**
+ * Validates the pasted kubeconfig from the add dialog, stores it, selects its first context, closes the dialog
+ * and reloads contexts. Shows an inline error when the YAML has no contexts.
+ */
 async function addKubeconfig(): Promise<void> {
-  const yaml = document.querySelector<HTMLTextAreaElement>("#new-config-yaml")?.value ?? "";
-  const err = document.querySelector<HTMLElement>("#config-error");
+  const yaml = query<HTMLTextAreaElement>("#new-config-yaml")?.value ?? "";
+  const err = query<HTMLElement>("#config-error");
   if (!validateKubeconfig(yaml)) {
     if (err) err.textContent = "This doesn't look like a valid kubeconfig. Include a contexts entry with at least one context name.";
     return;
   }
-  const name = document.querySelector<HTMLInputElement>("#new-config-name")?.value.trim() || "Saved kubeconfig";
+  const name = query<HTMLInputElement>("#new-config-name")?.value.trim() || "Saved kubeconfig";
   const id = `config-${Date.now().toString(36)}`;
   settings.savedConfigs.push({ id, name, yaml });
   const newContexts = getKubeconfigContextNames(yaml);
@@ -563,25 +855,27 @@ async function addKubeconfig(): Promise<void> {
   await loadRealContexts();
 }
 
+/** Closes the terminal dialog and returns focus to the control that opens it. */
 function closeTerminal(): void {
+  stopTerminalSplitDrag();
   terminalOpen = false;
   render();
-  document.querySelector<HTMLElement>('[data-action="open-terminal"]')?.focus();
+  query<HTMLElement>('[data-action="open-terminal"]')?.focus();
 }
+/** Closes the logs drawer and returns focus to the control that opened it. */
 function closeLogs(): void {
   const opener = logs?.opener ?? "";
   logs = null;
   render();
-  if (opener) document.querySelector<HTMLElement>(`[data-log-opener="${CSS.escape(opener)}"]`)?.focus();
+  if (opener) query<HTMLElement>(`[data-log-opener="${escapeSelector(opener)}"]`)?.focus();
 }
-function demoLogs(r: Resource, key: ResourceKey): string {
-  const lines = (n: string) => [`2026-10-03T08:59:01Z starting ${n}`, `2026-10-03T08:59:02Z ready to serve requests`, `2026-10-03T08:59:30Z healthy`].join("\n");
-  if (key === "nodes") {
-    const pods = snapshot.pods.filter(p => p.spec?.nodeName === r.metadata.name);
-    return pods.length ? pods.slice(0, 20).map(p => `== ${p.metadata.namespace}/${p.metadata.name} ==\n${lines(p.metadata.name)}`).join("\n\n") : "";
-  }
-  return lines(r.metadata.name);
-}
+/**
+ * Opens the logs drawer for a resource and fills it with log text from the host (or demo text).
+ * Kinds without logs get an explanatory message. If the drawer is closed or reopened while loading, the late
+ * result is discarded.
+ * @param r - Resource to show logs for.
+ * @param opener - Key of the control that opened the drawer, used to restore focus on close.
+ */
 async function openLogs(r: Resource, opener: string): Promise<void> {
   const key = view as ResourceKey;
   const title = `Logs · ${r.kind} ${r.metadata.namespace ? `${r.metadata.namespace}/` : ""}${r.metadata.name}`;
@@ -596,7 +890,7 @@ async function openLogs(r: Resource, opener: string): Promise<void> {
   try {
     const text: string = bridged()
       ? await call<string>("get_logs", { kind: key, namespace: r.metadata.namespace ?? "", name: r.metadata.name, context: selectedContext })
-      : demoLogs(r, key);
+      : demoLogs(r, key, snapshot.pods);
     if (logs !== current) return;
     logs = { ...current, body: text, state: text.trim() ? "ready" : "empty" };
   } catch (error) {
@@ -606,11 +900,18 @@ async function openLogs(r: Resource, opener: string): Promise<void> {
   render();
 }
 
-async function runTerminal(): Promise<void> {
-  const command = terminalInput.trim();
+/**
+ * Runs a command through the host's kubectl bridge using the selected output format. The command is parsed and
+ * validated first; parse errors, host failures and non-zero exits are all shown in the output pane.
+ * Output is truncated to 200,000 characters per stream.
+ * @param command - Command text; defaults to what is typed in the command box.
+ * @param rerun - True when repeating the last command after a format change: the box keeps its text and
+ * history gets no new entry.
+ */
+async function runTerminal(command: string = terminalInput.trim(), rerun = false): Promise<void> {
   terminalStderr = "";
   try {
-    const args = parseKubectlCommand(command);
+    const args = withOutputFormat(parseKubectlCommand(command), terminalFormat);
     let result: { stdout?: string; stderr?: string; exitCode?: number };
     try {
       result = await call("run_kubectl", { arguments: args, context: selectedContext });
@@ -625,33 +926,39 @@ async function runTerminal(): Promise<void> {
     terminalStderr = e instanceof Error ? e.message : "Unable to parse command.";
     terminalStatus = "1";
   }
-  terminalHistory.push({ command, output: terminalOutput || terminalStderr, status: terminalStatus ?? "1" });
-  terminalHistory = terminalHistory.slice(-1000);
-  terminalInput = "";
+  lastCommand = command;
+  if (!rerun) {
+    terminalHistory.push({ command, output: terminalOutput || terminalStderr, status: terminalStatus ?? "1" });
+    terminalHistory = terminalHistory.slice(-1000);
+    terminalInput = "";
+  }
   render();
-  document.querySelector<HTMLInputElement>("#terminal-input")?.focus();
+  query<HTMLTextAreaElement>("#terminal-input")?.focus();
 }
 
+/** Detects CLI tools through the host and records their availability and executable paths. */
 async function loadCliTools(): Promise<void> {
   if (!bridged()) return;
   try {
-    const result = await call<{ tools: Record<string, { available: boolean; path?: string }> }>("check_cli_tools");
-    for (const key of ["kubectl", "docker", "kind"] as const) {
+    const result = await call<{
+      host?: { os?: string; isWindows?: boolean };
+      tools: Record<string, { available: boolean; path?: string }>;
+    }>("check_cli_tools");
+    const hostWindows = Boolean(result.host?.isWindows || result.host?.os === "windows");
+    cli = { ...emptyCli, hostWindows };
+    cliPaths = {};
+    for (const key of ["kubectl", "docker", "kind", "aws", "bash", "wsl"] as const) {
       cli[key] = Boolean(result.tools[key]?.available);
       if (result.tools[key]?.path) cliPaths[key] = result.tools[key].path!;
     }
   } catch {
-    cli = { kubectl: false, docker: false, kind: false };
+    cli = { ...emptyCli };
   }
   cliChecking = false;
   render();
 }
 
-async function loadAbout(): Promise<void> {
-  try { about = { ...about, ...(await call<Partial<typeof about>>("get_about")) }; } catch { /* keep defaults */ }
-  render();
-}
-
+/** Replaces local settings with those stored by the host, if available. */
 async function loadPreferences(): Promise<void> {
   if (!bridged()) return;
   try {
@@ -664,21 +971,28 @@ async function loadPreferences(): Promise<void> {
   }
   render();
 }
+/** Mirrors the settings into `localStorage` so they survive reloads in the browser. */
 function saveSettingsToBrowser(): void {
   localStorage.setItem("orbita-preferences", JSON.stringify(settings));
 }
 
+// Startup: use the real clock only inside Tauri so demo screens stay deterministic.
 if (isTauri()) clock.now = Date.now;
 syncDemoContexts();
+/**
+ * Handles a native menu action by showing Settings or About.
+ * @param id - Menu item id; `"open-settings"` opens Settings, anything else opens About.
+ */
 function handleMenu(id: string): void { setView(id === "open-settings" ? "settings" : "about"); }
+// Draw immediately with demo data, then replace it with live data once the host answers.
 render();
 if (bridged()) {
   void (async () => {
     await loadPreferences();
     await loadCliTools();
-    await loadAbout();
     await loadRealContexts();
   })();
+  // Native menu events arrive via Tauri; tests dispatch the same event on `window`.
   window.addEventListener("orbita-menu", event => handleMenu(String((event as CustomEvent).detail)));
   if (isTauri()) void listen<string>("orbita-menu", event => handleMenu(event.payload)).catch(() => undefined);
 } else {

@@ -1,8 +1,25 @@
 {
-  "name": "orbita-tauri",
-  "private": true,
+  "name": "orbita",
+  "productName": "Orbita",
   "version": "0.1.0",
+  "description": "A focused workspace for understanding your Kubernetes clusters.",
+  "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/contd/orbita-tauri.git"
+  },
+  "keywords": [
+    "tauri",
+    "kubernetes",
+    "k8s",
+    "cluster",
+    "ui"
+  ],
+  "author": {
+    "name": "Jason Kumpf",
+    "email": "jason.kumpf@apexsupplychain.com"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

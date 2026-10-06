@@ -56,18 +56,70 @@ fn find_executable(name: &str) -> Option<PathBuf> {
     None
 }
 
+fn detected_status(path: Option<String>) -> ToolStatus {
+    ToolStatus {
+        available: true,
+        message: "Detected",
+        path,
+    }
+}
+
+fn not_detected_status() -> ToolStatus {
+    ToolStatus {
+        available: false,
+        message: "Not detected",
+        path: None,
+    }
+}
+
 fn tool_status(name: &str) -> ToolStatus {
     match find_executable(name) {
-        Some(path) => ToolStatus {
-            available: true,
-            message: "Detected",
-            path: Some(path.to_string_lossy().into_owned()),
-        },
-        None => ToolStatus {
-            available: false,
-            message: "Not detected",
-            path: None,
-        },
+        Some(path) => detected_status(Some(path.to_string_lossy().into_owned())),
+        None => not_detected_status(),
+    }
+}
+
+fn windows_wsl_status() -> ToolStatus {
+    if !cfg!(windows) {
+        return not_detected_status();
+    }
+    tool_status("wsl.exe")
+}
+
+fn windows_bash_status() -> ToolStatus {
+    if !cfg!(windows) {
+        return not_detected_status();
+    }
+    if let Some(path) = find_executable("bash.exe") {
+        return detected_status(Some(path.to_string_lossy().into_owned()));
+    }
+    let Some(wsl) = find_executable("wsl.exe") else {
+        return not_detected_status();
+    };
+    let output = Command::new(wsl)
+        .args(["-e", "bash", "-lc", "command -v bash"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+    match output {
+        Ok(result) if result.status.success() => {
+            let path = String::from_utf8_lossy(&result.stdout).trim().to_string();
+            if path.is_empty() {
+                not_detected_status()
+            } else {
+                detected_status(Some(format!("wsl:{path}")))
+            }
+        }
+        _ => not_detected_status(),
+    }
+}
+
+fn bash_status() -> ToolStatus {
+    if cfg!(windows) {
+        windows_bash_status()
+    } else {
+        tool_status("bash")
     }
 }
 
@@ -206,11 +258,17 @@ fn normalize_search_path(app: &AppHandle, value: &str) -> Result<String, String>
 
 #[tauri::command]
 fn check_cli_tools() -> Value {
+    let host_os = env::consts::OS;
+    let windows = cfg!(windows);
     json!({
+        "host": { "os": host_os, "isWindows": windows },
         "tools": {
             "kubectl": tool_status(if cfg!(windows) { "kubectl.exe" } else { "kubectl" }),
             "docker": tool_status(if cfg!(windows) { "docker.exe" } else { "docker" }),
-            "kind": tool_status(if cfg!(windows) { "kind.exe" } else { "kind" })
+            "kind": tool_status(if cfg!(windows) { "kind.exe" } else { "kind" }),
+            "aws": tool_status(if cfg!(windows) { "aws.exe" } else { "aws" }),
+            "bash": bash_status(),
+            "wsl": windows_wsl_status()
         }
     })
 }
@@ -337,6 +395,49 @@ fn get_resources(app: AppHandle, kind: String, namespace: String) -> Result<Valu
     }
     let document: Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("kubectl returned invalid JSON for {kind}: {e}"))?;
+    Ok(document.get("items").cloned().unwrap_or_else(|| json!([])))
+}
+
+#[tauri::command]
+fn get_resource_metrics(app: AppHandle, kind: String, namespace: String) -> Result<Value, String> {
+    if kind != "nodes" && kind != "pods" {
+        return Err(format!("Unsupported metrics collection: {kind}"));
+    }
+    let context = selected_context(&app)?;
+    let path = if kind == "nodes" {
+        "/apis/metrics.k8s.io/v1beta1/nodes".to_string()
+    } else if namespace.is_empty() || namespace == "All namespaces" {
+        "/apis/metrics.k8s.io/v1beta1/pods".to_string()
+    } else if namespace.starts_with('-') || namespace.contains('/') {
+        return Err("Invalid namespace for metrics request.".into());
+    } else {
+        format!("/apis/metrics.k8s.io/v1beta1/namespaces/{namespace}/pods")
+    };
+
+    let mut command = Command::new(kubectl_executable()?);
+    set_kubeconfig_environment(&mut command, &app)?;
+    let output = command
+        .arg("--context")
+        .arg(context)
+        .args(["get", "--raw"])
+        .arg(path)
+        .output()
+        .map_err(|e| format!("Could not start kubectl: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if !stderr.is_empty() {
+            return Err(stderr);
+        }
+        return Err(
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_string(),
+        );
+    }
+
+    let document: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("kubectl returned invalid metrics JSON for {kind}: {e}"))?;
     Ok(document.get("items").cloned().unwrap_or_else(|| json!([])))
 }
 
@@ -579,21 +680,6 @@ fn run_kubectl(app: AppHandle, arguments: Vec<String>) -> Result<CommandOutput, 
     })
 }
 
-fn about() -> Value {
-    json!({
-        "name": "Orbita",
-        "version": env!("CARGO_PKG_VERSION"),
-        "description": "A focused workspace for Kubernetes cluster inspection.",
-        "author": "Orbita contributors",
-        "repository": "https://github.com/orbita"
-    })
-}
-
-#[tauri::command]
-fn get_about() -> Value {
-    about()
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -617,11 +703,11 @@ pub fn run() {
             check_cli_tools,
             get_contexts,
             get_resources,
+            get_resource_metrics,
             get_preferences,
             save_preferences,
             run_kubectl,
-            get_logs,
-            get_about
+            get_logs
         ])
         .run(tauri::generate_context!())
         .expect("error while running Orbita");
