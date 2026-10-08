@@ -1,7 +1,7 @@
 {
   "name": "orbita",
   "productName": "Orbita",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "A focused workspace for understanding your Kubernetes clusters.",
   "private": true,
   "type": "module",
