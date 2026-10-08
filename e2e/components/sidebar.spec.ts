@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 
 test("orbita-sidebar navigates, folds groups and switches context", async ({ page }) => {

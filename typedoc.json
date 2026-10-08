@@ -1,5 +1,12 @@
 {
   "entryPoints": ["src/kubernetes.ts", "src/renderer.ts", "src/package-info.ts", "src/components/*.ts", "src/views/*.ts"],
-  "out": "docs-site/api",
-  "name": "Orbita API"
+  "out": "docs-site",
+  "readme": "README.md",
+  "name": "Orbita",
+  "navigationLinks": {
+    "API": "https://contd.github.io/orbita-tauri/modules.html",
+    "Unit report": "https://contd.github.io/orbita-tauri/reports/unit-report/index.html",
+    "E2E report": "https://contd.github.io/orbita-tauri/reports/e2e-report/index.html",
+    "E2E coverage": "https://contd.github.io/orbita-tauri/reports/e2e-report/coverage/index.html"
+  }
 }

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 
 test("orbita-header adapts its controls to the view", async ({ page }) => {

@@ -1,6 +1,6 @@
 [package]
 name = "orbita-tauri"
-version = "0.1.0"
+version = "1.0.0"
 description = "A focused desktop workspace for Kubernetes cluster inspection"
 authors = ["Orbita contributors"]
 edition = "2021"

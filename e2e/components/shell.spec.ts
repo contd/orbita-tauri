@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 
 /** Every component must be a registered custom element that rendered its own content. */

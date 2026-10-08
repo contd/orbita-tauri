@@ -65,3 +65,4 @@ dist/
 
 # Generated CI test reports
 reports/
+release-assets/

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { definitions, demo } from "../src/kubernetes";
 import { calls, launch, nav } from "./helpers";
 

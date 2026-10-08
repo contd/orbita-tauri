@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures";
 import { calls, launch } from "../helpers";
 
 test("orbita-terminal runs a command, records history and closes", async ({ page }) => {

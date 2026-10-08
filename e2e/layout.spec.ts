@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { launch } from "./helpers";
 
 for (const density of ["compact", "normal", "cozy"]) {

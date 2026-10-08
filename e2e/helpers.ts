@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, type Page } from "@playwright/test";
 import { demo } from "../src/kubernetes";
 
@@ -9,6 +10,42 @@ export type Options = {
   bash?: boolean;
   wsl?: boolean;
   windows?: boolean;
+};
+
+type PackageJsonForTests = {
+  name?: string;
+  productName?: string;
+  version?: string;
+  author?: string | { name?: string; email?: string };
+  repository?: string | { url?: string };
+};
+
+function parseAuthor(author: PackageJsonForTests["author"]): { author: string; email: string } {
+  if (!author) return { author: "", email: "" };
+  if (typeof author === "object") return { author: author.name ?? "", email: author.email ?? "" };
+  const email = /<([^>]+)>/.exec(author)?.[1] ?? "";
+  return { author: author.replace(/<[^>]*>|\([^)]*\)/g, "").trim(), email };
+}
+
+function parseRepository(repository: PackageJsonForTests["repository"]): string {
+  const raw = typeof repository === "string" ? repository : repository?.url ?? "";
+  return raw
+    .replace(/^git\+/, "")
+    .replace(/^git:\/\//, "https://")
+    .replace(/^git@([^:]+):/, "https://$1/")
+    .replace(/\.git$/, "");
+}
+
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as PackageJsonForTests;
+const parsedAuthor = parseAuthor(pkg.author);
+
+export const appPackageInfo = {
+  name: pkg.productName?.replace(/\s+Tauri$/, "") || pkg.name?.replace(/^./, c => c.toUpperCase()) || "Orbita",
+  packageName: pkg.name ?? "",
+  version: pkg.version ?? "",
+  author: parsedAuthor.author,
+  email: parsedAuthor.email,
+  repository: parseRepository(pkg.repository),
 };
 
 /** Installs a deterministic bridge so the app runs with no kubectl, kubeconfig or cluster. */

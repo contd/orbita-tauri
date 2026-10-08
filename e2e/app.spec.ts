@@ -1,6 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { definitions, demo } from "../src/kubernetes";
-import { calls, launch, nav } from "./helpers";
+import { appPackageInfo, calls, launch, nav } from "./helpers";
 
 test("launches without kubectl, kubeconfig or cluster in plain demo mode", async ({ page }) => {
   await page.goto("/");
@@ -77,8 +77,8 @@ test("about view opens from the native menu event", async ({ page }) => {
   await launch(page);
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("orbita-menu", { detail: "open-about" })));
   await expect(page.locator("h1")).toHaveText("About Orbita");
-  await expect(page.locator(".about-card")).toContainText("0.1.0");
-  await expect(page.locator(".about-card")).toContainText("jason.kumpf@apexsupplychain.com");
+  await expect(page.locator(".about-card")).toContainText(appPackageInfo.version);
+  await expect(page.locator(".about-card")).toContainText(appPackageInfo.email);
   await page.getByRole("button", { name: "Back to cluster" }).click();
   await expect(page.locator(".metric-card")).toHaveCount(4);
 });

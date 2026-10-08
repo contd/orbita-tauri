@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 
 test("orbita-cli-status reflects detection and shows tooltips", async ({ page }) => {

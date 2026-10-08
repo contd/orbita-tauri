@@ -23,9 +23,14 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "bun test tests",
+    "test": "node -e \"require('node:fs').mkdirSync('reports', { recursive: true })\" && bun test tests --reporter=junit --reporter-outfile=reports/unit.xml --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=reports/unit-coverage",
+    "test:docs": "node --test scripts/generate-test-docs.test.mjs",
+    "test:release": "node --test scripts/release.test.mjs",
+    "release:macos": "node scripts/release.mjs macos",
     "test:e2e": "playwright test",
-    "docs": "typedoc",
+    "docs:features": "node scripts/generate-features-readme.mjs",
+    "docs:reports": "node scripts/generate-test-docs.mjs",
+    "docs": "npm run docs:reports",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -36,6 +41,8 @@
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "^2",
+    "fast-xml-parser": "^5.11.2",
+    "monocart-reporter": "^2.14.1",
     "typedoc": "^0.28.20",
     "typescript": "~5.6.2",
     "vite": "^6.0.3"

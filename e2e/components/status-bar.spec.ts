@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
-import { launch } from "../helpers";
+import { expect, test } from "../fixtures";
+import { appPackageInfo, launch } from "../helpers";
 
 test("orbita-status-bar shows connection, notice and version, and opens the terminal", async ({ page }) => {
   await launch(page);
@@ -10,7 +10,7 @@ test("orbita-status-bar shows connection, notice and version, and opens the term
   await expect(page.locator("orbita-dashboard .notice")).toHaveCount(0);
   await bar.getByRole("button", { name: "Dismiss notice" }).click();
   await expect(bar.locator(".status-notice")).toHaveCount(0);
-  await expect(bar).toContainText("Orbita v0.1.0");
+  await expect(bar).toContainText(`${appPackageInfo.name} v${appPackageInfo.version}`);
   await expect(bar).not.toContainText("Demo mode");
   await bar.getByRole("button", { name: /Open kubectl terminal/ }).click();
   await expect(page.locator("orbita-terminal [role=dialog]")).toBeVisible();

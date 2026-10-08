@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 
 test("orbita-logs opens from a row action, escapes content, and returns focus on close", async ({ page }) => {
