@@ -81,6 +81,11 @@ test("orbita-terminal command box is one line until the text wraps, then two at 
   await box.fill("kubectl get pods");
   await expectLines(1);
   expect(await h()).toBeCloseTo(one, 0);
+  await box.evaluate(el => el.setAttribute("placeholder", "A long placeholder that wraps ".repeat(10)));
+  await box.fill("x");
+  await box.fill("");
+  await expectLines(1);
+  expect(await h()).toBeCloseTo(one, 0);
 });
 
 test("orbita-terminal Enter runs the command instead of adding a line", async ({ page }) => {

@@ -52,6 +52,34 @@ export async function validateRelease(root = process.cwd(), tag) {
   return validateVersions(JSON.parse(pkg), JSON.parse(tauri), cargo, tag);
 }
 
+export function synchronizedVersions(pkg, tauriText, cargo, lock) {
+  const tauri = JSON.parse(tauriText);
+  const packageSection = /(^\[package\][^\n]*\n)([\s\S]*?)(?=^\[|(?![\s\S]))/m;
+  const section = packageSection.exec(cargo);
+  if (!section || !/^version\s*=\s*"[^"]+"/m.test(section[2])) {
+    throw new Error("Cargo.toml has no explicit package version.");
+  }
+  const updatedCargo = cargo.replace(packageSection, (_, heading, body) =>
+    heading + body.replace(/^(version\s*=\s*")[^"]+(")/m, (_, before, after) => `${before}${pkg.version}${after}`));
+  validateVersions(pkg, { ...tauri, version: pkg.version }, updatedCargo);
+  const lockPackage = /(^\[\[package\]\]\r?\nname = "orbita-tauri"\r?\nversion = ")[^"]+(")/m;
+  if (!lockPackage.test(lock)) throw new Error("Cargo.lock has no orbita-tauri package version.");
+  if (!/^  "version": "[^"]+",?$/m.test(tauriText)) throw new Error("Tauri config has no explicit version field.");
+  return {
+    tauri: tauriText.replace(/^(  "version": ")[^"]+(")/m, (_, before, after) => `${before}${pkg.version}${after}`),
+    cargo: updatedCargo,
+    lock: lock.replace(lockPackage, (_, before, after) => `${before}${pkg.version}${after}`),
+  };
+}
+
+export async function synchronizeVersions(root = process.cwd()) {
+  const files = ["package.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock"];
+  const [pkg, tauri, cargo, lock] = await Promise.all(files.map(file => fs.readFile(path.join(root, file), "utf8")));
+  const updated = synchronizedVersions(JSON.parse(pkg), tauri, cargo, lock);
+  await Promise.all(Object.values(updated).map((text, index) => fs.writeFile(path.join(root, files[index + 1]), text)));
+  console.log(`Synchronized native release versions to ${JSON.parse(pkg).version}.`);
+}
+
 async function walk(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true });
   const lists = await Promise.all(entries.map(async entry => {
@@ -205,10 +233,11 @@ async function localMacos() {
 
 async function main() {
   const [command, platform, target] = process.argv.slice(2);
+  if (command === "sync") return synchronizeVersions();
   if (command === "macos") return localMacos();
   if (command === "collect") return collectBundles(platform, target);
   if (command === "prepare") return prepareRelease();
-  if (command !== "validate") throw new Error("Usage: release.mjs validate | macos | collect <platform> [target] | prepare");
+  if (command !== "validate") throw new Error("Usage: release.mjs sync | validate | macos | collect <platform> [target] | prepare");
   const release = await validateRelease(process.cwd(), process.env.RELEASE_TAG || undefined);
   const commit = (await run("git", ["rev-parse", "HEAD"], { capture: true })).stdout;
   const tagCommit = await run("git", ["rev-parse", "-q", "--verify", `refs/tags/${release.tag}^{commit}`], { capture: true, allowedCodes: [0, 1] });

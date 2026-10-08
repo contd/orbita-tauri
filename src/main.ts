@@ -327,12 +327,17 @@ const TERMINAL_INPUT_MAX_LINES = 2;
 function fitTerminalInput(): void {
   const box = query<HTMLTextAreaElement>("#terminal-input");
   if (!box) return;
-  // Measure content without the platform's default textarea/scrollbar minimum height.
-  box.style.height = "0px";
   const line = parseFloat(getComputedStyle(box).lineHeight) || box.clientHeight;
+  const overflow = box.style.overflowY;
+  // Scrollbars can narrow the text during measurement; placeholders must not size an empty command.
+  box.style.overflowY = "hidden";
+  box.style.height = `${line}px`;
   const chrome = box.offsetHeight - box.clientHeight;
-  const lines = Math.min(TERMINAL_INPUT_MAX_LINES, Math.max(1, Math.round(box.scrollHeight / line)));
+  const lines = box.value
+    ? Math.min(TERMINAL_INPUT_MAX_LINES, Math.max(1, Math.round(box.scrollHeight / line)))
+    : 1;
   box.style.height = `${lines * line + chrome}px`;
+  box.style.overflowY = overflow;
 }
 
 /**

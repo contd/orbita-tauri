@@ -21,6 +21,8 @@
     "email": "jason.kumpf@apexsupplychain.com"
   },
   "scripts": {
+    "version": "node scripts/release.mjs sync && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock",
+    "version:sync": "node scripts/release.mjs sync",
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "node -e \"require('node:fs').mkdirSync('reports', { recursive: true })\" && bun test tests --reporter=junit --reporter-outfile=reports/unit.xml --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=reports/unit-coverage",

@@ -202,6 +202,8 @@ On successful CI runs on `main` or release runs, the reports and screenshots are
 
 GitHub Actions publishes a release when a version tag such as `v1.1.0` is pushed. The CI workflow can also be run manually with a matching release tag. The versions in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` must match the tag; update and commit `src-tauri/Cargo.lock` after changing the Rust package version. Existing tags must point to the selected commit. CI/test/release jobs use Ubuntu 24.04 and Node 24-compatible actions; Linux installer builds remain on Ubuntu 22.04 for compatibility.
 
+Use `npm version patch`, `npm version minor`, or `npm version <version>` to bump a release. The npm `version` hook synchronizes and stages all three native version files before npm creates its version commit and tag. Start from a clean working tree. If you edit `package.json` manually, run `npm run version:sync` and commit the updated native files before creating the tag. CI validates versions rather than silently changing them during a build. Rerunning an existing tag always uses that tag's original commit, not later fixes.
+
 Both unit and E2E tests must pass before any native build job starts. Builds produce:
 
 | Platform | Architecture | Downloads |
@@ -255,7 +257,7 @@ _Generated from the latest local or CI test reports by `npm run docs:reports`. F
 | Suite | Lines | Functions | Branches |
 | --- | ---: | ---: | ---: |
 | Unit | 96.55% (1345/1393) | 93.20% (288/309) | Not reported |
-| E2E | 91.24% (1303/1428) | 90.95% (382/420) | 66.05% (907/1373) |
+| E2E | 91.26% (1306/1431) | 90.95% (382/420) | 66.10% (909/1375) |
 
 Coverage measures loaded TypeScript files under `src/`, excluding dependencies and test helpers. Unit coverage uses Bun; E2E coverage uses Chromium V8, mapped back to TypeScript through Vite source maps and converted to Istanbul HTML/LCOV. Summaries use the LCOV totals. These tools use different coverage instrumentation, so their percentages are not directly comparable. Bun does not report branch coverage in LCOV; "Not reported" is not zero coverage. "N/A" means there are no measurable items.
 

@@ -3,9 +3,26 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { collectBundles, prepareRelease, validateVersions, writeChecksums } from "./release.mjs";
+import { collectBundles, prepareRelease, synchronizedVersions, validateVersions, writeChecksums } from "./release.mjs";
 
 const cargo = '[package]\nname = "orbita-tauri"\nversion = "1.0.0"\n';
+
+test("version synchronization updates only the app package and is idempotent", () => {
+  const pkg = { version: "1.1.1" };
+  const tauri = '{\n  "version": "1.1.0",\n  "productName": "Orbita"\n}\n';
+  const manifest = `${cargo}\n[dependencies]\nexample = { version = "1.0.0" }\n`;
+  const lock = 'version = 4\n\n[[package]]\nname = "other"\nversion = "1.0.0"\n\n[[package]]\nname = "orbita-tauri"\nversion = "1.1.0"\ndependencies = ["other"]\n';
+  const updated = synchronizedVersions(pkg, tauri, manifest, lock);
+  assert.equal(JSON.parse(updated.tauri).version, "1.1.1");
+  assert.match(updated.cargo, /version = "1.1.1"/);
+  assert.match(updated.cargo, /example = \{ version = "1.0.0" \}/);
+  assert.match(updated.lock, /name = "other"\nversion = "1.0.0"/);
+  assert.match(updated.lock, /name = "orbita-tauri"\nversion = "1.1.1"/);
+  assert.deepEqual(synchronizedVersions(pkg, updated.tauri, updated.cargo, updated.lock), updated);
+  assert.throws(() => synchronizedVersions({ version: "bad" }, tauri, manifest, lock));
+  assert.throws(() => synchronizedVersions(pkg, tauri, "[package]\nname = \"orbita-tauri\"\n", lock));
+  assert.throws(() => synchronizedVersions(pkg, tauri, manifest, 'version = 4\n'));
+});
 
 test("release version must match all manifests and the tag", () => {
   assert.deepEqual(validateVersions({ version: "1.0.0" }, { version: "1.0.0" }, cargo),
