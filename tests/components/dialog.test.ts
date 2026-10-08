@@ -1,3 +1,8 @@
+/**
+ * Bun tests for the closed and open add-kubeconfig dialog, accessibility, and dismissal actions.
+ * @module tests/components/dialog.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderDialog } from "../../src/components/dialog";
 import { makeState } from "../helpers";

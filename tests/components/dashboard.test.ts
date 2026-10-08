@@ -1,3 +1,11 @@
+/**
+ * Bun tests for dashboard grids, metric counts, event limits, and workload navigation.
+ *
+ * @remarks
+ * Also verifies local-hour greetings, date labels, refresh text, and a table-free layout.
+ * @module tests/components/dashboard.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { demo } from "../../src/kubernetes";
 import { eyebrowDate, greeting, renderDashboard } from "../../src/components/dashboard";

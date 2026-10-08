@@ -1,3 +1,8 @@
+/**
+ * Bun tests for CLI detection pills, checking states, tooltips, and Windows WSL visibility.
+ * @module tests/components/cli-status.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderCli } from "../../src/components/cli-status";
 import { makeState } from "../helpers";

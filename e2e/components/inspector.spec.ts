@@ -1,3 +1,8 @@
+/**
+ * Playwright checks for row inspectors, log actions, Escape/backdrop dismissal, and non-log views.
+ * @module e2e/components/inspector.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

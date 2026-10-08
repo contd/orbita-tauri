@@ -1,3 +1,8 @@
+/**
+ * Playwright checks for resource sorting, inspector opening, clearable empty states, and column dragging.
+ * @module e2e/components/resource-table.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

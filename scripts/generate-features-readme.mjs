@@ -1,3 +1,13 @@
+/**
+ * Converts Playwright screenshots into illustrated README feature descriptions.
+ *
+ * @remarks
+ * Run `npm run docs:features` after screenshot-producing E2E tests. Known images
+ * use curated titles; resource-view images and other filenames use derived titles.
+ * This command updates the Features section without building the TypeDoc site.
+ * @module scripts/generate-features-readme
+ * @category Scripts
+ */
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -56,6 +66,11 @@ const VIEW_LABELS = {
   storageclasses: "StorageClasses",
 };
 
+/**
+ * Converts a hyphenated screenshot basename to a readable title.
+ * @param {string} baseName - Filename without its extension.
+ * @returns {string} Space-separated, capitalized title.
+ */
 function titleFromFilename(baseName) {
   return baseName
     .split("-")
@@ -64,6 +79,11 @@ function titleFromFilename(baseName) {
     .join(" ");
 }
 
+/**
+ * Chooses curated or filename-derived copy for a screenshot.
+ * @param {string} baseName - Screenshot basename.
+ * @returns {{title: string, description: string}} Feature heading and description.
+ */
 function describeFeature(baseName) {
   const override = FEATURE_OVERRIDES[baseName];
   if (override) return override;
@@ -82,6 +102,11 @@ function describeFeature(baseName) {
   };
 }
 
+/**
+ * Renders the marked Markdown feature gallery in the supplied image order.
+ * @param {string[]} imageFiles - Screenshot filenames.
+ * @returns {string} Features heading, descriptions, and image links.
+ */
 function renderFeaturesSection(imageFiles) {
   const rows = imageFiles.map((fileName) => {
     const baseName = path.parse(fileName).name;
@@ -105,6 +130,12 @@ ${rows.join("\n\n")}
 ${endMarker}`;
 }
 
+/**
+ * Replaces an existing Features section or inserts one before Project Support.
+ * @param {string} readme - Current README text.
+ * @param {string} section - Complete replacement feature section.
+ * @returns {string} Updated README text.
+ */
 function replaceFeaturesSection(readme, section) {
   const lines = readme.split("\n");
   const headingIndex = lines.findIndex(line => line.trim() === "# Features");
@@ -131,6 +162,11 @@ function replaceFeaturesSection(readme, section) {
   return `${readme.trimEnd()}\n\n${section}\n`;
 }
 
+/**
+ * Collects supported screenshots and writes the generated README feature gallery.
+ * @returns {Promise<void>} Resolves after the README has been updated.
+ * @throws If screenshots are unavailable or filesystem operations fail.
+ */
 async function main() {
   const entries = await fs.readdir(SCREENSHOT_DIR, { withFileTypes: true });
   const imageFiles = entries

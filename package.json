@@ -43,6 +43,7 @@
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "^2",
+    "@types/bun": "^1.4.2",
     "fast-xml-parser": "^5.11.2",
     "monocart-reporter": "^2.14.1",
     "typedoc": "^0.28.20",

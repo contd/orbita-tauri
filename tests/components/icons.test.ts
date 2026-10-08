@@ -1,3 +1,8 @@
+/**
+ * Bun tests for decorative SVG icons and the fallback used for unknown icon names.
+ * @module tests/components/icons.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { icon } from "../../src/components/icons";
 

@@ -1,7 +1,16 @@
+/**
+ * Shared render-state fixtures for Bun unit tests.
+ * @module tests/helpers
+ * @category Tests
+ */
 import { demo, type ResourceKey } from "../src/kubernetes";
 import type { RenderState } from "../src/components/types";
 
-/** Builds a complete demo-mode render state, with optional overrides. */
+/**
+ * Builds a complete demo-mode render state with optional top-level overrides.
+ * @param over - Fields to replace in the default fixture.
+ * @returns A render state with demo resources, CLI flags, settings, and metadata.
+ */
 export function makeState(over: Partial<RenderState> = {}): RenderState {
   return {
     view: "dashboard", search: "", sort: { column: "Name", direction: 1 }, inspector: null, dialog: null, collapsed: new Set(), sidebarCollapsed: false,

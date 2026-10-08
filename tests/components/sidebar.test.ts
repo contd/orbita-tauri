@@ -1,3 +1,11 @@
+/**
+ * Bun tests for sidebar resource groups, loaded counts, context controls, and collapse behavior.
+ *
+ * @remarks
+ * Verifies the Add kubeconfig action and accessible navigation in the collapsed icon rail.
+ * @module tests/components/sidebar.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { definitions, demo, groups } from "../../src/kubernetes";
 import { renderSidebar } from "../../src/components/sidebar";

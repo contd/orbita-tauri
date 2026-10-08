@@ -1,3 +1,13 @@
+/**
+ * Bun unit tests for Kubernetes formatting, resource state, and command handling.
+ *
+ * @remarks
+ * Uses a fixed clock and synthetic resources to cover identity, age, readiness,
+ * status tones, natural sorting, manifests, syntax highlighting, table schemas,
+ * kubeconfig validation, kubectl parsing/shortcuts/output formats, and demo logs.
+ * @module tests/kubernetes.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import {
   age, ageDate, clock, compactMemory, compareValues, cronJobState, definitions, demo, escapeHtml, expandKubectlShortcut, formatValue, withOutputFormat, getDef, getPath,
@@ -8,6 +18,14 @@ import {
 
 const NOW = Date.parse("2026-10-03T09:00:00Z");
 clock.now = () => NOW;
+/**
+ * Builds a minimal Kubernetes resource for focused helper assertions.
+ * @param kind - Kubernetes kind.
+ * @param name - Resource name.
+ * @param ns - Optional namespace.
+ * @param rest - Additional or overriding resource fields.
+ * @returns Resource with a v1 header and supplied metadata.
+ */
 const r = (kind: string, name: string, ns?: string, rest: Partial<Resource> = {}): Resource =>
   ({ apiVersion: "v1", kind, metadata: { name, ...(ns ? { namespace: ns } : {}) }, ...rest });
 

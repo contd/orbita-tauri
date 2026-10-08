@@ -1,3 +1,8 @@
+/**
+ * Bun tests for connection/version status, demo markers, CLI indicators, notices, and escaping.
+ * @module tests/components/status-bar.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderStatusBar } from "../../src/components/status-bar";
 import { makeState } from "../helpers";

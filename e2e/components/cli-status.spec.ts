@@ -1,3 +1,8 @@
+/**
+ * Playwright checks for CLI availability indicators, hover tooltips, and Windows WSL state.
+ * @module e2e/components/cli-status.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

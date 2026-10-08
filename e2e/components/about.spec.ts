@@ -1,3 +1,8 @@
+/**
+ * Playwright checks that About displays metadata from the real package manifest.
+ * @module e2e/components/about.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { appPackageInfo, launch } from "../helpers";
 

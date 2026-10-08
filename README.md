@@ -201,7 +201,12 @@ Browse StorageClasses in a sortable table view with quick actions and detailed i
 
 ## Documentation and test reports
 
-The [GitHub Pages documentation site](https://contd.github.io/orbita-tauri/) uses this README as its home page, alongside the TypeDoc API documentation and full test reports.
+The [GitHub Pages documentation site](https://contd.github.io/orbita-tauri/) uses this README as its home page, alongside the TypeDoc API documentation and full test reports. Its module index groups documentation into **API**, **Scripts**, and **Tests**:
+
+- [**Scripts**](https://contd.github.io/orbita-tauri/modules.html#scripts) documents coverage parsing, README generation, and release tooling.
+- [**Tests**](https://contd.github.io/orbita-tauri/modules.html#tests) documents Bun unit suites, Node tooling tests, Playwright E2E suites, and shared helpers/fixtures. Suite pages describe their coverage; detailed execution results remain in the test reports.
+
+TypeDoc expands all source files in `scripts/`, `tests/`, and `e2e/`. Module comments use `@module` and `@category` to keep these sections organized. `tsconfig.docs.json` includes JavaScript tooling and Bun/Node test declarations without changing the application build configuration.
 
 ```sh
 npm test
@@ -266,7 +271,7 @@ _Generated from the latest local or CI test reports by `npm run docs:reports`. F
 | Suite | Total | Passed | Failed | Skipped | Flaky |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Unit | 131 | 131 | 0 | 0 | 0 |
-| E2E | 85 | 85 | 0 | 0 | 0 |
+| E2E | 84 | 84 | 0 | 0 | 0 |
 
 [Full unit report](https://contd.github.io/orbita-tauri/reports/unit-report/index.html) · [Unit JUnit XML](https://contd.github.io/orbita-tauri/reports/unit.xml) · [Full E2E report with coverage](https://contd.github.io/orbita-tauri/reports/e2e-report/index.html) · [Playwright HTML report](https://contd.github.io/orbita-tauri/e2e-report/index.html) · [E2E JSON](https://contd.github.io/orbita-tauri/reports/e2e.json)
 
@@ -275,7 +280,7 @@ _Generated from the latest local or CI test reports by `npm run docs:reports`. F
 | Suite | Lines | Functions | Branches |
 | --- | ---: | ---: | ---: |
 | Unit | 96.55% (1345/1393) | 93.20% (288/309) | Not reported |
-| E2E | 91.26% (1306/1431) | 90.95% (382/420) | 66.10% (909/1375) |
+| E2E | 91.26% (1306/1431) | 90.95% (382/420) | 66.03% (908/1375) |
 
 Coverage measures loaded TypeScript files under `src/`, excluding dependencies and test helpers. Unit coverage uses Bun; E2E coverage uses Chromium V8, mapped back to TypeScript through Vite source maps and converted to Istanbul HTML/LCOV. Summaries use the LCOV totals. These tools use different coverage instrumentation, so their percentages are not directly comparable. Bun does not report branch coverage in LCOV; "Not reported" is not zero coverage. "N/A" means there are no measurable items.
 

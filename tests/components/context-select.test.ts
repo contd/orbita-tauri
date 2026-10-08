@@ -1,3 +1,8 @@
+/**
+ * Bun tests for context options, selected values, escaped labels, and fallback names.
+ * @module tests/components/context-select.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderContextSelect } from "../../src/components/context-select";
 import { makeState } from "../helpers";

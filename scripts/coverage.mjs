@@ -1,7 +1,23 @@
+/**
+ * LCOV parsing and HTML rendering shared by documentation and release tooling.
+ *
+ * @remarks
+ * Coverage includes measured TypeScript under `src/`. Missing branch data is
+ * distinguished from zero coverage; aggregate percentages use weighted counts.
+ * @module scripts/coverage
+ * @category Scripts
+ */
 import path from "node:path";
 
 const METRICS = { lines: ["LF", "LH"], functions: ["FNF", "FNH"], branches: ["BRF", "BRH"] };
 
+/**
+ * Parses a required, nonnegative LCOV count without accepting fractional values.
+ * @param {string} value - Raw LCOV field value.
+ * @param {string} label - Field name used in validation errors.
+ * @returns {number} Validated safe integer.
+ * @throws If the value is missing or is not a nonnegative safe integer.
+ */
 function nonnegativeInteger(value, label) {
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
     throw new Error(`Invalid ${label} in LCOV coverage report.`);
@@ -9,12 +25,26 @@ function nonnegativeInteger(value, label) {
   return Number(value);
 }
 
+/**
+ * Builds a coverage metric using Istanbul-compatible percentage truncation.
+ * @param {number} total - Number of measurable items.
+ * @param {number} covered - Number of covered items.
+ * @returns {{total: number, covered: number, pct: number | null}} Counts and percentage; null when no items are measurable.
+ * @throws If covered items exceed the total.
+ */
 function metric(total, covered) {
   if (covered > total) throw new Error("LCOV covered count exceeds total.");
   // Match the two-decimal truncation used by Istanbul's detailed HTML reports.
   return { total, covered, pct: total === 0 ? null : Math.floor(covered * 10000 / total) / 100 };
 }
 
+/**
+ * Validates LCOV records and summarizes measured application source files.
+ * @param {string} lcov - Complete LCOV report text.
+ * @param {string} root - Repository root used to normalize source paths.
+ * @returns Coverage totals and sorted per-file results with uncovered line numbers.
+ * @throws If records are incomplete, inconsistent, duplicated, or contain no application source files.
+ */
 export function parseCoverage(lcov, root = process.cwd()) {
   if (!lcov.trim().endsWith("end_of_record")) throw new Error("Incomplete LCOV coverage report.");
   const files = [];
@@ -65,15 +95,31 @@ export function parseCoverage(lcov, root = process.cwd()) {
   return { summary, files: files.sort((a, b) => a.path.localeCompare(b.path)) };
 }
 
+/**
+ * Formats a metric for Markdown and HTML reports, preserving unsupported data.
+ * @param {{total: number, covered: number, pct: number | null} | null} value - Metric or null when not reported.
+ * @returns {string} Percentage and counts, N/A, or Not reported.
+ */
 export function formatCoverage(value) {
   if (value === null) return "Not reported";
   return `${value.pct === null ? "N/A" : `${value.pct.toFixed(2)}%`} (${value.covered}/${value.total})`;
 }
 
+/**
+ * Escapes report text for safe insertion into HTML content and attributes.
+ * @param {unknown} value - Value to stringify and escape.
+ * @returns {string} HTML-safe text.
+ */
 function escapeHtml(value) {
   return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
+/**
+ * Renders a standalone unit report with outcomes, coverage, and uncovered lines.
+ * @param {{total: number, passed: number, failed: number, skipped: number}} stats - Unit test totals.
+ * @param {ReturnType<typeof parseCoverage>} coverage - Validated LCOV summary and file metrics.
+ * @returns {string} Complete HTML document with links to raw JUnit and LCOV reports.
+ */
 export function renderUnitReport(stats, coverage) {
   const cells = value => ["lines", "functions", "branches"].map(name => `<td>${formatCoverage(value[name])}</td>`).join("");
   const rows = coverage.files.map(file => `<tr><td>${escapeHtml(file.path)}</td>${cells(file)}<td>${file.uncoveredLines.join(", ") || "None"}</td></tr>`).join("\n");

@@ -1,3 +1,8 @@
+/**
+ * Bun tests for About metadata, technology logos, escaping, and safe repository links.
+ * @module tests/components/about.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderAbout } from "../../src/components/about";
 import { makeState } from "../helpers";

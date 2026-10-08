@@ -1,3 +1,8 @@
+/**
+ * Bun tests for metric-card targets, percentage rendering, and escaped custom-element attributes.
+ * @module tests/components/metric-card.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { metricCardTag, renderMetric } from "../../src/components/metric-card";
 

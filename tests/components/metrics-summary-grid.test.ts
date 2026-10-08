@@ -1,3 +1,8 @@
+/**
+ * Bun tests for four usage-summary cards and metrics.k8s.io-shaped resource quantities.
+ * @module tests/components/metrics-summary-grid.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderMetricsSummaryGrid } from "../../src/components/metrics-summary-grid";
 import { makeState } from "../helpers";

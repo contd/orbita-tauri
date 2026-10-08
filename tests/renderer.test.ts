@@ -1,3 +1,12 @@
+/**
+ * Bun integration tests for renderers composed from custom-element components.
+ *
+ * @remarks
+ * Covers shell composition, dashboard navigation, sidebar counts and collapse,
+ * table filtering, logs, terminal states, status text, and escaped user content.
+ * @module tests/renderer.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { demo, definitions } from "../src/kubernetes";
 import { makeState } from "./helpers";

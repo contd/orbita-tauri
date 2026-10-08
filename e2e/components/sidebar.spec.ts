@@ -1,3 +1,11 @@
+/**
+ * Playwright checks for navigation, group folding, context switching, and the Add kubeconfig action.
+ *
+ * @remarks
+ * Also verifies collapse to an icon rail, increased page width, and persisted collapse state.
+ * @module e2e/components/sidebar.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

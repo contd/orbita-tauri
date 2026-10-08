@@ -1,3 +1,8 @@
+/**
+ * Bun tests for inspector identity, accessibility, manifest cleanup, logs, labels, and events.
+ * @module tests/components/inspector.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { demo } from "../../src/kubernetes";
 import { renderInspector } from "../../src/components/inspector";

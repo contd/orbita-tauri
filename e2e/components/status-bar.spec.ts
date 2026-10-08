@@ -1,3 +1,8 @@
+/**
+ * Playwright checks for connection/version text, dismissible notices, and opening the terminal.
+ * @module e2e/components/status-bar.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { appPackageInfo, launch } from "../helpers";
 

@@ -1,5 +1,19 @@
+/**
+ * Node regression tests for report parsing, coverage summaries, and README updates.
+ *
+ * @remarks
+ * Run `npm run test:docs`. Covers JUnit suite shapes, flaky Playwright outcomes,
+ * malformed inputs, weighted LCOV totals, unsupported metrics, HTML escaping,
+ * idempotent README marker replacement, and complete Scripts/Tests documentation.
+ * @module scripts/generate-test-docs.test
+ * @category Tests
+ */
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { Application } from "typedoc";
 import { renderReports, summarizeE2e, summarizeUnit, updateReadme } from "./generate-test-docs.mjs";
 import { formatCoverage, parseCoverage, renderUnitReport } from "./coverage.mjs";
 
@@ -129,4 +143,33 @@ test("damaged or duplicate README markers fail without overwriting content", () 
     "<!-- TEST-REPORTS:START --><!-- TEST-REPORTS:START --><!-- TEST-REPORTS:END -->",
     "<!-- TEST-REPORTS:START --><!-- TEST-REPORTS:END --><!-- TEST-REPORTS:END -->",
   ]) assert.throws(() => updateReadme(readme, "new"));
+});
+
+test("TypeDoc documents every script and test module in the correct section", async () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const options = path.join(root, "typedoc.json");
+  const config = JSON.parse(await fs.readFile(options, "utf8"));
+  const app = await Application.bootstrapWithPlugins({ options, readme: "none" });
+  const project = await app.convert();
+  assert.ok(project, "TypeDoc conversion must succeed");
+  assert.equal(app.logger.hasErrors(), false);
+  assert.equal(app.logger.hasWarnings(), false);
+  assert.deepEqual(project.categories.map(category => category.title), ["API", "Scripts", "Tests"]);
+  for (const directory of ["scripts", "tests", "e2e"]) {
+    const files = await fs.readdir(path.join(root, directory), { recursive: true });
+    for (const file of files.filter(file => /\.(?:mjs|ts)$/.test(file))) {
+      const name = `${directory}/${file.replaceAll("\\", "/").replace(/\.(?:mjs|ts)$/, "")}`;
+      const modules = project.children.filter(module => module.name === name);
+      assert.equal(modules.length, 1, `Expected one documentation module for ${name}`);
+      const module = modules[0];
+      assert.ok(module.comment?.summary.some(part => part.text.trim()), `${name} must have a description`);
+      const category = directory === "scripts" && !file.endsWith(".test.mjs") ? "Scripts" : "Tests";
+      assert.ok(project.categories.find(section => section.title === category).children.includes(module),
+        `${name} must appear in ${category}`);
+    }
+  }
+  assert.equal(config.readme, "README.md");
+  const links = app.options.getValue("navigationLinks");
+  assert.match(links.Scripts, /modules\.html#scripts$/);
+  assert.match(links.Tests, /modules\.html#tests$/);
 });

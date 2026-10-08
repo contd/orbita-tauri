@@ -1,3 +1,12 @@
+/**
+ * Bun tests for custom-element registration and current-state rendering.
+ *
+ * @remarks
+ * A fake registry verifies missing-registry handling, idempotent definitions,
+ * connected callbacks, and element-aware rendering; globals are cleaned afterward.
+ * @module tests/components/base.test
+ * @category Tests
+ */
 import { afterEach, describe, expect, test } from "bun:test";
 import { defineComponent, defineElement, setCurrentState } from "../../src/components/base";
 import { makeState } from "../helpers";

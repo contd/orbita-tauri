@@ -1,3 +1,13 @@
+/**
+ * Playwright integration tests for full application workflows using the mock bridge.
+ *
+ * @remarks
+ * Covers demo startup, filtering/sorting, refresh and lazy loading, persisted settings,
+ * kubeconfig editing, native menu events, context-bound terminal commands, history,
+ * logs, and behavior when CLI tools are unavailable.
+ * @module e2e/app.spec
+ * @category Tests
+ */
 import { expect, test } from "./fixtures";
 import { definitions, demo } from "../src/kubernetes";
 import { appPackageInfo, calls, launch, nav } from "./helpers";

@@ -1,3 +1,13 @@
+/**
+ * Node regression tests for version synchronization and release asset safeguards.
+ *
+ * @remarks
+ * Run `npm run test:release`. Covers manifest/tag agreement, prereleases,
+ * idempotent version edits, installer validation, passing-report gates, and
+ * deterministic checksums using isolated temporary repositories.
+ * @module scripts/release.test
+ * @category Tests
+ */
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -47,6 +57,11 @@ test("version mismatch errors report the actual manifest versions", () => {
   );
 });
 
+/**
+ * Runs a release assertion against a temporary root with matching manifests.
+ * @param {(root: string) => Promise<void>} callback - Assertions and fixture setup.
+ * @returns {Promise<void>} Resolves after assertions and temporary-file cleanup.
+ */
 async function fixture(callback) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbita-release-test-"));
   try {

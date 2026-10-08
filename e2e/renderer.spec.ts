@@ -1,3 +1,12 @@
+/**
+ * Playwright tests for resource views, dashboard links, inspector rendering, and appearance.
+ *
+ * @remarks
+ * Generates a test for every resource definition, verifying its schema and demo
+ * rows. Also checks CLI indicators, collapsed groups, themes, density, and width.
+ * @module e2e/renderer.spec
+ * @category Tests
+ */
 import { expect, test } from "./fixtures";
 import { definitions, demo } from "../src/kubernetes";
 import { calls, launch, nav } from "./helpers";

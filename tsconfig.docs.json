@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "types": ["node", "bun"]
+  },
+  "include": ["src", "scripts/**/*.mjs", "tests/**/*.ts", "e2e/**/*.ts"]
+}

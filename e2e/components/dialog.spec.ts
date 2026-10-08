@@ -1,3 +1,8 @@
+/**
+ * Playwright checks for pasted kubeconfig validation, dialog dismissal, and added contexts.
+ * @module e2e/components/dialog.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

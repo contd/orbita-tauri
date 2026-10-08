@@ -1,10 +1,17 @@
 {
-  "entryPoints": ["src/kubernetes.ts", "src/renderer.ts", "src/package-info.ts", "src/components/*.ts", "src/views/*.ts"],
+  "entryPoints": ["src/kubernetes.ts", "src/renderer.ts", "src/package-info.ts", "src/components/*.ts", "src/views/*.ts", "scripts", "tests", "e2e"],
+  "entryPointStrategy": "expand",
+  "tsconfig": "tsconfig.docs.json",
+  "categorizeByGroup": false,
+  "defaultCategory": "API",
+  "categoryOrder": ["API", "Scripts", "Tests", "*"],
   "out": "docs-site",
   "readme": "README.md",
   "name": "Orbita",
   "navigationLinks": {
     "API": "https://contd.github.io/orbita-tauri/modules.html",
+    "Scripts": "https://contd.github.io/orbita-tauri/modules.html#scripts",
+    "Tests": "https://contd.github.io/orbita-tauri/modules.html#tests",
     "Unit report": "https://contd.github.io/orbita-tauri/reports/unit-report/index.html",
     "E2E report": "https://contd.github.io/orbita-tauri/reports/e2e-report/index.html",
     "E2E coverage": "https://contd.github.io/orbita-tauri/reports/e2e-report/coverage/index.html"

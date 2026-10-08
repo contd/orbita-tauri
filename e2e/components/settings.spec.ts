@@ -1,3 +1,8 @@
+/**
+ * Playwright checks for search-path validation/saving, returning to the cluster, and theme changes.
+ * @module e2e/components/settings.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

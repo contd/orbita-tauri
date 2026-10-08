@@ -1,3 +1,12 @@
+/**
+ * Playwright checks for registered shell elements and layout-neutral wrappers.
+ *
+ * @remarks
+ * Verifies active components render content and closed overlay components remain
+ * empty; layout wrappers must retain display: contents.
+ * @module e2e/components/shell.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

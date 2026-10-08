@@ -1,3 +1,8 @@
+/**
+ * Bun tests for view-specific toolbar controls, namespace scope, and escaped selections/search.
+ * @module tests/components/header.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderHeader } from "../../src/components/header";
 import { makeState } from "../helpers";

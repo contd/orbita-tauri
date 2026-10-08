@@ -1,3 +1,12 @@
+/**
+ * Playwright layout matrix for status-bar placement across densities and views.
+ *
+ * @remarks
+ * Verifies bottom pinning at compact, normal, and cozy density on dashboard and
+ * pod views at a fixed 1200 by 600 viewport.
+ * @module e2e/layout.spec
+ * @category Tests
+ */
 import { expect, test } from "./fixtures";
 import { launch } from "./helpers";
 

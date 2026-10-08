@@ -1,3 +1,13 @@
+/**
+ * Generates the README test summary and the TypeDoc GitHub Pages site.
+ *
+ * @remarks
+ * Run `npm run docs:reports` after unit and E2E tests have generated their reports
+ * and coverage. The site uses the README as its home page, documents API, Scripts,
+ * and Tests modules, and copies detailed reports and screenshots into the output.
+ * @module scripts/generate-test-docs
+ * @category Scripts
+ */
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +18,13 @@ import { formatCoverage, parseCoverage, renderUnitReport } from "./coverage.mjs"
 const START = "<!-- TEST-REPORTS:START -->";
 const END = "<!-- TEST-REPORTS:END -->";
 
+/**
+ * Validates a required test-report count.
+ * @param {unknown} value - Numeric value or numeric string from a report.
+ * @param {string} label - Name included in validation errors.
+ * @returns {number} Nonnegative safe integer.
+ * @throws If the count is absent or invalid.
+ */
 function count(value, label) {
   const number = Number(value);
   if (!["number", "string"].includes(typeof value) || String(value).trim() === "" || !Number.isSafeInteger(number) || number < 0) {
@@ -16,6 +33,12 @@ function count(value, label) {
   return number;
 }
 
+/**
+ * Summarizes JUnit XML without double-counting nested suite totals.
+ * @param {string} xml - Bun JUnit report.
+ * @returns Unit totals with failures and errors combined and flaky set to zero.
+ * @throws If XML, suite totals, or outcome counts are invalid.
+ */
 export function summarizeUnit(xml) {
   const valid = XMLValidator.validate(xml);
   if (valid !== true) throw new Error(`Invalid unit JUnit XML: ${valid.err.msg}`);
@@ -40,6 +63,12 @@ export function summarizeUnit(xml) {
   return result;
 }
 
+/**
+ * Summarizes Playwright outcomes, counting retry passes separately as flaky.
+ * @param {{stats: {expected: number, unexpected: number, skipped: number, flaky: number}, errors: unknown[]}} report - Playwright JSON report.
+ * @returns Total, passed, failed, skipped, and flaky counts.
+ * @throws If the report is incomplete or contains run-level errors.
+ */
 export function summarizeE2e(report) {
   if (!report.stats || !Array.isArray(report.errors)) throw new Error("Invalid Playwright JSON report.");
   if (report.errors.length) throw new Error("Playwright report contains run-level errors; inspect reports/e2e.json.");
@@ -50,6 +79,14 @@ export function summarizeE2e(report) {
   return { total: passed + failed + skipped + flaky, passed, failed, skipped, flaky };
 }
 
+/**
+ * Builds the marked README section containing test outcomes and coverage links.
+ * @param {ReturnType<typeof summarizeUnit>} unit - Unit outcomes.
+ * @param {ReturnType<typeof summarizeE2e>} e2e - Browser test outcomes.
+ * @param {ReturnType<typeof parseCoverage>["summary"]} unitCoverage - Unit coverage totals.
+ * @param {ReturnType<typeof parseCoverage>["summary"]} e2eCoverage - Browser coverage totals.
+ * @returns {string} Markdown enclosed in test-report markers.
+ */
 export function renderReports(unit, e2e, unitCoverage, e2eCoverage) {
   const row = (name, stats) => `| ${name} | ${stats.total} | ${stats.passed} | ${stats.failed} | ${stats.skipped} | ${stats.flaky} |`;
   return `${START}
@@ -81,6 +118,13 @@ The full report links above are served on the [documentation site](https://contd
 ${END}`;
 }
 
+/**
+ * Inserts or replaces the test-report section while preserving other README text.
+ * @param {string} readme - Existing README content.
+ * @param {string} section - Replacement marked section.
+ * @returns {string} Updated README.
+ * @throws If existing markers are incomplete, duplicated, or out of order.
+ */
 export function updateReadme(readme, section) {
   const start = readme.indexOf(START);
   const end = readme.indexOf(END);
@@ -91,6 +135,12 @@ export function updateReadme(readme, section) {
   return readme.slice(0, start) + section + readme.slice(end + END.length);
 }
 
+/**
+ * Validates reports, updates the README, and builds the documentation site.
+ * @param {string} root - Repository containing reports, assets, and TypeDoc configuration.
+ * @returns {Promise<void>} Resolves after documentation and report assets are written.
+ * @throws If required inputs are missing, reports are malformed, or TypeDoc fails.
+ */
 export async function generateDocs(root = process.cwd()) {
   const [xml, json, readme, unitLcov, e2eLcov] = await Promise.all([
     fs.readFile(path.join(root, "reports/unit.xml"), "utf8"),

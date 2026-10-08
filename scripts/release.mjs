@@ -1,3 +1,14 @@
+/**
+ * Validates, synchronizes, collects, and packages native Orbita releases.
+ *
+ * @remarks
+ * Commands: `sync`, `validate`, `collect <platform> [target]`, `prepare`, and
+ * `macos`. CI uses the individual commands; `npm run release:macos` runs local
+ * validation, tests, documentation, and an unsigned macOS build in sequence.
+ * Assets include installers, reports, documentation, Git metadata, and checksums.
+ * @module scripts/release
+ * @category Scripts
+ */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -14,6 +25,15 @@ const PACKAGE_TYPES = {
   macos: [".dmg"],
 };
 
+/**
+ * Requires npm, Tauri, Cargo, and the release tag to agree on a release version.
+ * @param {{version: string}} pkg - npm package metadata.
+ * @param {{version: string}} tauri - Tauri configuration.
+ * @param {string} cargo - Cargo manifest text.
+ * @param {string} tag - Expected Git tag, defaulting to the npm version prefixed by v.
+ * @returns {{version: string, tag: string, prerelease: boolean}} Validated release identity.
+ * @throws If the version format or any manifest/tag version is inconsistent.
+ */
 export function validateVersions(pkg, tauri, cargo, tag = `v${pkg.version}`) {
   const cargoVersion = /^\[package\]\s*[\s\S]*?^version\s*=\s*"([^"]+)"/m.exec(cargo)?.[1];
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version)) {
@@ -26,6 +46,13 @@ export function validateVersions(pkg, tauri, cargo, tag = `v${pkg.version}`) {
   return { version: pkg.version, tag, prerelease: pkg.version.includes("-") };
 }
 
+/**
+ * Runs a child process and rejects unexpected exit codes.
+ * @param {string} command - Executable name.
+ * @param {string[]} args - Arguments passed without a shell.
+ * @param {import("node:child_process").SpawnOptions & {capture?: boolean, allowedCodes?: number[]}} options - Spawn options and output/exit-code policy.
+ * @returns {Promise<{code: number, stdout: string}>} Exit code and trimmed captured stdout.
+ */
 function run(command, args, { capture = false, allowedCodes = [0], ...options } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit", ...options });
@@ -43,6 +70,12 @@ function run(command, args, { capture = false, allowedCodes = [0], ...options } 
   });
 }
 
+/**
+ * Reads release manifests from disk and validates their versions.
+ * @param {string} root - Repository root.
+ * @param {string} [tag] - Optional expected release tag.
+ * @returns {Promise<ReturnType<typeof validateVersions>>} Validated release identity.
+ */
 export async function validateRelease(root = process.cwd(), tag) {
   const [pkg, tauri, cargo] = await Promise.all([
     fs.readFile(path.join(root, "package.json"), "utf8"),
@@ -52,6 +85,15 @@ export async function validateRelease(root = process.cwd(), tag) {
   return validateVersions(JSON.parse(pkg), JSON.parse(tauri), cargo, tag);
 }
 
+/**
+ * Produces native manifest text synchronized to npm without changing dependencies.
+ * @param {{version: string}} pkg - npm version source.
+ * @param {string} tauriText - Tauri JSON text.
+ * @param {string} cargo - Cargo manifest text.
+ * @param {string} lock - Cargo lockfile text.
+ * @returns {{tauri: string, cargo: string, lock: string}} Updated native file contents.
+ * @throws If required version fields or the app lockfile entry are missing.
+ */
 export function synchronizedVersions(pkg, tauriText, cargo, lock) {
   const tauri = JSON.parse(tauriText);
   const packageSection = /(^\[package\][^\n]*\n)([\s\S]*?)(?=^\[|(?![\s\S]))/m;
@@ -72,6 +114,11 @@ export function synchronizedVersions(pkg, tauriText, cargo, lock) {
   };
 }
 
+/**
+ * Writes synchronized native versions for the npm version lifecycle hook.
+ * @param {string} root - Repository root.
+ * @returns {Promise<void>} Resolves after all three native version files are written.
+ */
 export async function synchronizeVersions(root = process.cwd()) {
   const files = ["package.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock"];
   const [pkg, tauri, cargo, lock] = await Promise.all(files.map(file => fs.readFile(path.join(root, file), "utf8")));
@@ -80,6 +127,11 @@ export async function synchronizeVersions(root = process.cwd()) {
   console.log(`Synchronized native release versions to ${JSON.parse(pkg).version}.`);
 }
 
+/**
+ * Lists bundle paths recursively, treating macOS app bundles as single assets.
+ * @param {string} directory - Directory to traverse.
+ * @returns {Promise<string[]>} Files and app-bundle directories.
+ */
 async function walk(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true });
   const lists = await Promise.all(entries.map(async entry => {
@@ -90,6 +142,14 @@ async function walk(directory) {
   return lists.flat();
 }
 
+/**
+ * Copies current-version native installers into release-assets.
+ * @param {"windows" | "linux" | "macos"} platform - Installer family.
+ * @param {string} target - Rust target, or empty to use the host build directory.
+ * @param {string} root - Repository root.
+ * @returns {Promise<void>} Resolves after installer copies and any macOS app ZIP are complete.
+ * @throws If required installer types are missing or build inputs are invalid.
+ */
 export async function collectBundles(platform, target = "", root = process.cwd()) {
   const extensions = PACKAGE_TYPES[platform];
   if (!extensions) throw new Error(`Unsupported release platform: ${platform}`);
@@ -116,6 +176,12 @@ export async function collectBundles(platform, target = "", root = process.cwd()
   console.log(`Collected ${platform} release bundles in ${output}.`);
 }
 
+/**
+ * Writes sorted SHA-256 checksums for files, excluding the checksum file itself.
+ * @param {string} directory - Release asset directory.
+ * @returns {Promise<void>} Resolves after SHA256SUMS.txt is written.
+ * @throws If there are no release assets.
+ */
 export async function writeChecksums(directory) {
   const files = (await fs.readdir(directory, { withFileTypes: true }))
     .filter(entry => entry.isFile() && entry.name !== "SHA256SUMS.txt")
@@ -128,6 +194,13 @@ export async function writeChecksums(directory) {
   await fs.writeFile(path.join(directory, "SHA256SUMS.txt"), `${lines.join("\n")}\n`);
 }
 
+/**
+ * Packages passing test reports, the docs snapshot, release notes, and provenance.
+ * @param {string} root - Repository root containing installers and generated reports.
+ * @param {NodeJS.ProcessEnv} env - Release tag, GitHub run, repository, and Pages metadata.
+ * @returns {Promise<void>} Resolves after archives, metadata, notes, and checksums are written.
+ * @throws If manifests disagree, test reports fail or are empty, or required assets are missing.
+ */
 export async function prepareRelease(root = process.cwd(), env = process.env) {
   const release = await validateRelease(root, env.RELEASE_TAG || undefined);
   const [unitXml, e2eJson, unitLcov, e2eLcov] = await Promise.all([
@@ -210,6 +283,11 @@ See \`release-metadata.json\` for Git/build metadata and \`SHA256SUMS.txt\` for 
   console.log(`Prepared release reports, documentation, metadata and checksums in ${output}.`);
 }
 
+/**
+ * Gates an unsigned local macOS release on type checks, tests, and documentation.
+ * @returns {Promise<void>} Resolves after native builds and release asset preparation.
+ * @throws If not running on macOS or the output directory already contains assets.
+ */
 async function localMacos() {
   if (os.platform() !== "darwin") throw new Error("release:macos must run on macOS.");
   await validateRelease();
@@ -231,6 +309,11 @@ async function localMacos() {
   await prepareRelease();
 }
 
+/**
+ * Dispatches CLI commands and checks tag provenance during release validation.
+ * @returns {Promise<void>} Resolves when the selected release command completes.
+ * @throws If the command is unknown or a release tag points to another commit.
+ */
 async function main() {
   const [command, platform, target] = process.argv.slice(2);
   if (command === "sync") return synchronizeVersions();

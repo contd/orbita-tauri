@@ -1,3 +1,12 @@
+/**
+ * Playwright checks for dashboard custom elements, metric attributes, and navigation.
+ *
+ * @remarks
+ * Covers workload links and mini statistics; an installed browser clock verifies
+ * the local date and afternoon greeting independently of the actual test time.
+ * @module e2e/components/dashboard.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

@@ -1,3 +1,8 @@
+/**
+ * Playwright checks for row log actions, escaped output, and focus restoration after closing.
+ * @module e2e/components/logs.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

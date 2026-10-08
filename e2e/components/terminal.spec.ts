@@ -1,3 +1,12 @@
+/**
+ * Playwright checks for terminal commands, history, context safety, and CLI gating.
+ *
+ * @remarks
+ * Covers panel placement, Enter submission, shortcut expansion, explicit closing,
+ * focus/caret preservation, animation stability, and text/JSON output toggles.
+ * @module e2e/components/terminal.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { calls, launch } from "../helpers";
 
@@ -98,7 +107,11 @@ test("orbita-terminal ignores Escape and backdrop clicks and closes only with it
   await expect(term).toBeEmpty();
 });
 
-/** Re-renders the whole app without touching focus, as a background data refresh does. */
+/**
+ * Triggers a full app re-render through a native-style menu event without moving focus.
+ * @param page - Browser page running the app.
+ * @returns Resolves after the About menu event has been dispatched.
+ */
 const backgroundRender = (page: import("@playwright/test").Page) =>
   page.evaluate(() => window.dispatchEvent(new CustomEvent("orbita-menu", { detail: "open-about" })));
 

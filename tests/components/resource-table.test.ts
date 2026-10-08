@@ -1,3 +1,12 @@
+/**
+ * Bun tests for table schemas, accessible rows, filters, sorting, and loading/empty states.
+ *
+ * @remarks
+ * Also covers cluster-scoped namespace behavior, saved column widths, and label
+ * truncation that retains the complete hover text.
+ * @module tests/components/resource-table.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { demo } from "../../src/kubernetes";
 import { filteredResources, renderResourceTable } from "../../src/components/resource-table";

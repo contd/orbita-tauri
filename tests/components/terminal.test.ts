@@ -1,3 +1,8 @@
+/**
+ * Bun tests for terminal visibility, CLI gating, stdout/stderr, history, expansion, and format controls.
+ * @module tests/components/terminal.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderTerminal } from "../../src/components/terminal";
 import { makeState } from "../helpers";

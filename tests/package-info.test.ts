@@ -1,3 +1,12 @@
+/**
+ * Bun unit tests for package metadata used by the About page.
+ *
+ * @remarks
+ * Covers field mapping, string author/repository parsing, absent optional fields,
+ * and consistency with the repository's package manifest.
+ * @module tests/package-info.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import pkg from "../package.json";
 import { aboutFromPackage, packageInfo } from "../src/package-info";

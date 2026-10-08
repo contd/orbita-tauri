@@ -1,3 +1,8 @@
+/**
+ * Playwright checks for view-specific toolbar controls and search filtering that preserves focus.
+ * @module e2e/components/header.spec
+ * @category Tests
+ */
 import { expect, test } from "../fixtures";
 import { launch } from "../helpers";
 

@@ -1,8 +1,18 @@
+/**
+ * Bun tests for log-dialog visibility, titles, loading/empty/error states, and escaped output.
+ * @module tests/components/logs.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderLogs } from "../../src/components/logs";
 import { makeState } from "../helpers";
 import type { LogsState } from "../../src/components/types";
 
+/**
+ * Builds a ready log-panel fixture with state-specific overrides.
+ * @param over - Log fields to replace.
+ * @returns Complete log state for renderer assertions.
+ */
 const logs = (over: Partial<LogsState>): LogsState => ({ title: "Logs · Pod x", body: "line", state: "ready", opener: "inspector", ...over });
 
 describe("orbita-logs", () => {

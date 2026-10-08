@@ -1,3 +1,8 @@
+/**
+ * Bun tests for search paths, saved kubeconfigs, appearance choices, save feedback, and CLI paths.
+ * @module tests/components/settings.test
+ * @category Tests
+ */
 import { describe, expect, test } from "bun:test";
 import { renderSettings } from "../../src/components/settings";
 import { makeState } from "../helpers";
