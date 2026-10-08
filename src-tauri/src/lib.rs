@@ -3,13 +3,16 @@ use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     env, fs,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     io::Read,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
+    sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
+#[cfg(unix)]
+use std::io::{Seek, SeekFrom};
 use tauri::{
     menu::{Menu, MenuItem, Submenu},
     AppHandle, Emitter, Manager,
@@ -17,6 +20,99 @@ use tauri::{
 
 const MAX_OUTPUT_BYTES: usize = 200_000;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(unix)]
+const SHELL_TIMEOUT: Duration = Duration::from_secs(10);
+static USER_ENVIRONMENT: OnceLock<Result<UserEnvironment, String>> = OnceLock::new();
+
+struct UserEnvironment {
+    path: OsString,
+    kubeconfig: Option<OsString>,
+}
+
+fn user_environment() -> Result<&'static UserEnvironment, String> {
+    USER_ENVIRONMENT
+        .get_or_init(load_user_environment)
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+#[cfg(unix)]
+fn parse_shell_environment(bytes: &[u8]) -> Result<UserEnvironment, String> {
+    use std::os::unix::ffi::OsStringExt;
+    let marker = b"\0ORBITA_ENV\0";
+    let start = bytes.windows(marker.len()).rposition(|value| value == marker)
+        .ok_or("The login shell did not return its environment.")? + marker.len();
+    let mut path = None;
+    let mut kubeconfig = None;
+    for field in bytes[start..].split(|byte| *byte == 0) {
+        if let Some(value) = field.strip_prefix(b"PATH=") {
+            path = Some(OsString::from_vec(value.to_vec()));
+        } else if let Some(value) = field.strip_prefix(b"KUBECONFIG=") {
+            kubeconfig = Some(OsString::from_vec(value.to_vec()));
+        }
+    }
+    let path = path.filter(|value| !value.is_empty())
+        .ok_or("The login shell returned no usable PATH.")?;
+    Ok(UserEnvironment { path, kubeconfig })
+}
+
+fn load_user_environment() -> Result<UserEnvironment, String> {
+    #[cfg(unix)]
+    {
+        let shell = env::var_os("SHELL").ok_or("SHELL is not set; cannot read the login-shell environment.")?;
+        read_login_shell_environment(Path::new(&shell), SHELL_TIMEOUT)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(UserEnvironment {
+            path: env::var_os("PATH").ok_or("PATH is not set.")?,
+            kubeconfig: env::var_os("KUBECONFIG"),
+        })
+    }
+}
+
+#[cfg(unix)]
+fn read_login_shell_environment(shell: &Path, timeout: Duration) -> Result<UserEnvironment, String> {
+    if !shell.is_absolute() {
+        return Err("The login-shell path must be absolute.".into());
+    }
+    // File-backed output avoids hangs from background jobs retaining shell pipes.
+    let mut stdout = tempfile::tempfile().map_err(|e| e.to_string())?;
+    let mut stderr = tempfile::tempfile().map_err(|e| e.to_string())?;
+    let mut child = Command::new(shell)
+        .args(["-ilc", "/usr/bin/printf '\\0ORBITA_ENV\\0'; /usr/bin/env -0"])
+        .stdin(Stdio::null())
+        .stdout(stdout.try_clone().map_err(|e| e.to_string())?)
+        .stderr(stderr.try_clone().map_err(|e| e.to_string())?)
+        .spawn().map_err(|e| format!("Could not start the login shell: {e}"))?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            child.kill().map_err(|e| format!("Could not stop the login shell: {e}"))?;
+            child.wait().map_err(|e| e.to_string())?;
+            return Err("Reading the login-shell environment timed out.".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    stderr.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    let mut errors = Vec::new();
+    Read::by_ref(&mut stderr).take(MAX_OUTPUT_BYTES as u64).read_to_end(&mut errors)
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err(format!("The login shell failed ({status}): {}", String::from_utf8_lossy(&errors).trim()));
+    }
+    stdout.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut stdout).take(MAX_OUTPUT_BYTES as u64 + 1).read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_OUTPUT_BYTES {
+        return Err("The login-shell environment exceeds the startup output limit.".into());
+    }
+    parse_shell_environment(&bytes)
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,15 +135,20 @@ struct BoundedOutput {
     truncated: bool,
 }
 
-fn find_executable(name: &str) -> Option<PathBuf> {
-    let path = env::var_os("PATH")?;
-    for directory in env::split_paths(&path) {
+fn find_executable(name: &str) -> Result<Option<PathBuf>, String> {
+    Ok(find_executable_on_path(name, &user_environment()?.path))
+}
+
+fn find_executable_on_path(name: &str, path: &OsStr) -> Option<PathBuf> {
+    for directory in env::split_paths(path) {
         let candidate = directory.join(name);
         if candidate.is_file() {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if fs::metadata(&candidate).ok()?.permissions().mode() & 0o111 == 0 {
+                if !fs::metadata(&candidate)
+                    .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+                {
                     continue;
                 }
             }
@@ -73,37 +174,38 @@ fn not_detected_status() -> ToolStatus {
     }
 }
 
-fn tool_status(name: &str) -> ToolStatus {
-    match find_executable(name) {
+fn tool_status(name: &str) -> Result<ToolStatus, String> {
+    Ok(match find_executable(name)? {
         Some(path) => detected_status(Some(path.to_string_lossy().into_owned())),
         None => not_detected_status(),
-    }
+    })
 }
 
-fn windows_wsl_status() -> ToolStatus {
+fn windows_wsl_status() -> Result<ToolStatus, String> {
     if !cfg!(windows) {
-        return not_detected_status();
+        return Ok(not_detected_status());
     }
     tool_status("wsl.exe")
 }
 
-fn windows_bash_status() -> ToolStatus {
+fn windows_bash_status() -> Result<ToolStatus, String> {
     if !cfg!(windows) {
-        return not_detected_status();
+        return Ok(not_detected_status());
     }
-    if let Some(path) = find_executable("bash.exe") {
-        return detected_status(Some(path.to_string_lossy().into_owned()));
+    if let Some(path) = find_executable("bash.exe")? {
+        return Ok(detected_status(Some(path.to_string_lossy().into_owned())));
     }
-    let Some(wsl) = find_executable("wsl.exe") else {
-        return not_detected_status();
+    let Some(wsl) = find_executable("wsl.exe")? else {
+        return Ok(not_detected_status());
     };
     let output = Command::new(wsl)
+        .env("PATH", &user_environment()?.path)
         .args(["-e", "bash", "-lc", "command -v bash"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output();
-    match output {
+    Ok(match output {
         Ok(result) if result.status.success() => {
             let path = String::from_utf8_lossy(&result.stdout).trim().to_string();
             if path.is_empty() {
@@ -113,10 +215,10 @@ fn windows_bash_status() -> ToolStatus {
             }
         }
         _ => not_detected_status(),
-    }
+    })
 }
 
-fn bash_status() -> ToolStatus {
+fn bash_status() -> Result<ToolStatus, String> {
     if cfg!(windows) {
         windows_bash_status()
     } else {
@@ -129,7 +231,7 @@ fn kubectl_executable() -> Result<PathBuf, String> {
         "kubectl.exe"
     } else {
         "kubectl"
-    })
+    })?
     .ok_or_else(|| "kubectl was not detected on PATH.".to_string())
 }
 
@@ -178,7 +280,11 @@ fn add_path_or_directory(
     path: &Path,
     paths: &mut Vec<PathBuf>,
     environment: bool,
+    excluded: Option<&Path>,
 ) -> Result<(), String> {
+    if excluded == Some(path) {
+        return Ok(());
+    }
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -201,6 +307,9 @@ fn add_path_or_directory(
         entries.sort_by_key(|entry| entry.path());
         for entry in entries {
             let candidate = entry.path();
+            if excluded == Some(candidate.as_path()) {
+                continue;
+            }
             let hidden = entry.file_name().to_string_lossy().starts_with('.');
             if hidden && !(environment && environment_kubeconfig_file(&candidate)) {
                 continue;
@@ -209,7 +318,7 @@ fn add_path_or_directory(
                 format!("Could not inspect kubeconfig entry {}: {e}", candidate.display())
             })?;
             if file_type.is_dir() {
-                add_path_or_directory(&candidate, paths, environment)?;
+                add_path_or_directory(&candidate, paths, environment, excluded)?;
             } else if candidate.is_file()
                 && (!environment || environment_kubeconfig_file(&candidate))
                 && looks_like_kubeconfig(&candidate)?
@@ -228,21 +337,20 @@ fn discover_kubeconfig_paths(
     saved_dir: &Path,
 ) -> Result<Vec<PathBuf>, String> {
     let mut candidates = Vec::new();
-    add_path_or_directory(
-        &home.join(".kube").join("config"),
-        &mut candidates,
-        false,
-    )?;
+    let default_path = home.join(".kube").join("config");
+    let excluded = environment_paths.map(|_| default_path.as_path());
     if let Some(environment_paths) = environment_paths {
         for path in env::split_paths(environment_paths).filter(|path| !path.as_os_str().is_empty()) {
-            add_path_or_directory(&path, &mut candidates, true)?;
+            add_path_or_directory(&path, &mut candidates, true, excluded)?;
         }
+    } else {
+        add_path_or_directory(&default_path, &mut candidates, false, None)?;
     }
     if let Some(configured) = configured {
-        add_path_or_directory(configured, &mut candidates, false)?;
+        add_path_or_directory(configured, &mut candidates, false, excluded)?;
     }
-    add_path_or_directory(&home.join("kubeconfig"), &mut candidates, false)?;
-    add_path_or_directory(saved_dir, &mut candidates, false)?;
+    add_path_or_directory(&home.join("kubeconfig"), &mut candidates, false, excluded)?;
+    add_path_or_directory(saved_dir, &mut candidates, false, excluded)?;
 
     let mut unique = Vec::new();
     for path in candidates {
@@ -251,6 +359,9 @@ fn discover_kubeconfig_paths(
         if !unique.contains(&normalized) {
             unique.push(normalized);
         }
+    }
+    if environment_paths.is_some() && unique.is_empty() {
+        return Err("KUBECONFIG is set, but no eligible kubeconfigs were found. Use .kubeconfig or .yaml files, or unset KUBECONFIG to use ~/.kube/config.".into());
     }
     Ok(unique)
 }
@@ -263,7 +374,7 @@ fn kubeconfig_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
         .and_then(Value::as_str)
         .map(|value| normalize_search_path(app, value).map(PathBuf::from))
         .transpose()?;
-    let environment = env::var_os("KUBECONFIG");
+    let environment = &user_environment()?.kubeconfig;
     let saved_dir = preferences_path(app)?.with_file_name("kubeconfigs");
     discover_kubeconfig_paths(
         &home,
@@ -274,6 +385,7 @@ fn kubeconfig_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
 }
 
 fn set_kubeconfig_environment(command: &mut Command, app: &AppHandle) -> Result<(), String> {
+    command.env("PATH", &user_environment()?.path);
     let paths = kubeconfig_paths(app)?;
     configure_kubeconfig_environment(command, &paths)
 }
@@ -325,20 +437,26 @@ fn normalize_search_path(app: &AppHandle, value: &str) -> Result<String, String>
 }
 
 #[tauri::command]
-fn check_cli_tools() -> Value {
+async fn check_cli_tools() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(detect_cli_tools)
+        .await
+        .map_err(|e| format!("CLI detection task failed: {e}"))?
+}
+
+fn detect_cli_tools() -> Result<Value, String> {
     let host_os = env::consts::OS;
     let windows = cfg!(windows);
-    json!({
+    Ok(json!({
         "host": { "os": host_os, "isWindows": windows },
         "tools": {
-            "kubectl": tool_status(if cfg!(windows) { "kubectl.exe" } else { "kubectl" }),
-            "docker": tool_status(if cfg!(windows) { "docker.exe" } else { "docker" }),
-            "kind": tool_status(if cfg!(windows) { "kind.exe" } else { "kind" }),
-            "aws": tool_status(if cfg!(windows) { "aws.exe" } else { "aws" }),
-            "bash": bash_status(),
-            "wsl": windows_wsl_status()
+            "kubectl": tool_status(if cfg!(windows) { "kubectl.exe" } else { "kubectl" })?,
+            "docker": tool_status(if cfg!(windows) { "docker.exe" } else { "docker" })?,
+            "kind": tool_status(if cfg!(windows) { "kind.exe" } else { "kind" })?,
+            "aws": tool_status(if cfg!(windows) { "aws.exe" } else { "aws" })?,
+            "bash": bash_status()?,
+            "wsl": windows_wsl_status()?
         }
-    })
+    }))
 }
 
 fn discover_context_names(app: &AppHandle) -> Result<Vec<String>, String> {
@@ -672,12 +790,7 @@ fn run_kubectl(app: AppHandle, arguments: Vec<String>) -> Result<CommandOutput, 
         return Err("Context and kubeconfig overrides are not allowed.".into());
     }
 
-    let executable = find_executable(if cfg!(windows) {
-        "kubectl.exe"
-    } else {
-        "kubectl"
-    })
-    .ok_or_else(|| "kubectl was not detected on PATH.".to_string())?;
+    let executable = kubectl_executable()?;
     let mut command = Command::new(executable);
     set_kubeconfig_environment(&mut command, &app)?;
     let mut child = command
@@ -832,9 +945,9 @@ mod tests {
     }
 
     #[test]
-    fn kubeconfig_sources_prioritize_home_then_environment_then_settings() {
+    fn kubeconfig_environment_replaces_home_and_precedes_settings() {
         let fixture = Fixture::new();
-        let home = fixture.write(".kube/config", CONFIG);
+        fixture.write(".kube/config", CONFIG);
         let first = fixture.write("first.kubeconfig", CONFIG);
         let second = fixture.write("second.yaml", CONFIG);
         let configured = fixture.write("configured/config", CONFIG);
@@ -842,7 +955,7 @@ mod tests {
         let saved = fixture.write("saved/context.yaml", CONFIG);
         assert_eq!(
             fixture.discover(&[first.clone(), second.clone()], Some(&configured)),
-            vec![home, first, second, configured, legacy, saved],
+            vec![first, second, configured, legacy, saved],
         );
     }
 
@@ -891,21 +1004,121 @@ mod tests {
             fixture.discover(&[fixture.0.join("missing.yaml"), valid.clone()], None),
             vec![valid],
         );
-        assert!(fixture.discover(&[], None).is_empty());
+        assert!(discover_kubeconfig_paths(
+            &fixture.0, None, None, &fixture.0.join("saved"),
+        ).unwrap().is_empty());
     }
 
     #[test]
     fn duplicate_paths_keep_first_occurrence() {
         let fixture = Fixture::new();
-        let home = fixture.write(".kube/config", CONFIG);
+        fixture.write(".kube/config", CONFIG);
         let valid = fixture.write("configs/context.yaml", CONFIG);
         assert_eq!(
             fixture.discover(
                 &[valid.clone(), fixture.0.join("configs"), valid.clone()],
                 Some(&fixture.0.join(".kube")),
             ),
-            vec![home, valid],
+            vec![valid],
         );
+    }
+
+    #[test]
+    fn unset_kubeconfig_checks_home_before_settings_and_saved_configs() {
+        let fixture = Fixture::new();
+        let home = fixture.write(".kube/config", CONFIG);
+        let configured = fixture.write("configured/custom.yaml", CONFIG);
+        let saved = fixture.write("saved/context.yaml", CONFIG);
+        assert_eq!(
+            discover_kubeconfig_paths(
+                &fixture.0, None, Some(&configured), &fixture.0.join("saved"),
+            ).unwrap(),
+            vec![home, configured, saved],
+        );
+    }
+
+    #[test]
+    fn set_kubeconfig_does_not_reintroduce_home_through_default_settings() {
+        let fixture = Fixture::new();
+        fixture.write(".kube/config", CONFIG);
+        let config = fixture.write("environment.yaml", CONFIG);
+        assert_eq!(
+            fixture.discover(&[config.clone()], Some(&fixture.0.join(".kube"))),
+            vec![config],
+        );
+        for environment in [OsStr::new(""), OsStr::new("missing.yaml")] {
+            let error = discover_kubeconfig_paths(
+                &fixture.0, Some(environment), Some(&fixture.0.join(".kube")),
+                &fixture.0.join("saved"),
+            ).unwrap_err();
+            assert!(error.contains("KUBECONFIG is set"));
+        }
+        let home_path = fixture.0.join(".kube/config");
+        fs::remove_file(&home_path).unwrap();
+        fs::create_dir(&home_path).unwrap();
+        fixture.write(".kube/config/nested.yaml", CONFIG);
+        let valid = fixture.write("valid.yaml", CONFIG);
+        assert_eq!(
+            fixture.discover(&[valid.clone()], Some(&fixture.0.join(".kube"))),
+            vec![valid],
+        );
+    }
+
+    #[test]
+    fn executable_search_respects_path_override_order() {
+        let fixture = Fixture::new();
+        let name = if cfg!(windows) { "kubectl.exe" } else { "kubectl" };
+        let first = fixture.write(&format!("override/{name}"), "");
+        let second = fixture.write(&format!("system/{name}"), "");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for file in [&first, &second] {
+                fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        let path = env::join_paths([first.parent().unwrap(), second.parent().unwrap()]).unwrap();
+        assert_eq!(find_executable_on_path(name, &path), Some(first.clone()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&first, fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(find_executable_on_path(name, &path), Some(second));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_environment_preserves_path_order_and_kubeconfig_presence() {
+        let environment = parse_shell_environment(
+            b"startup noise\n\0ORBITA_ENV\0PATH=/custom/bin:/usr/bin\0KUBECONFIG=/custom/a.yaml\0",
+        ).unwrap();
+        assert_eq!(environment.path, "/custom/bin:/usr/bin");
+        assert_eq!(environment.kubeconfig.unwrap(), "/custom/a.yaml");
+        assert!(parse_shell_environment(b"\0ORBITA_ENV\0PATH=/usr/bin\0")
+            .unwrap().kubeconfig.is_none());
+        assert_eq!(parse_shell_environment(b"\0ORBITA_ENV\0PATH=/usr/bin\0KUBECONFIG=\0")
+            .unwrap().kubeconfig, Some(OsString::new()));
+        assert!(parse_shell_environment(b"no marker").is_err());
+        assert!(parse_shell_environment(b"\0ORBITA_ENV\0PATH=\0").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_loading_reads_exports_and_reports_failures_and_timeout() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        let shell = fixture.write("shell", "#!/bin/sh\n[ \"$1\" = -ilc ] || exit 2\nexport PATH=/override/bin:/usr/bin\nexport KUBECONFIG=/override/config.yaml\nexec /bin/sh -c \"$2\"\n");
+        fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+        let environment = read_login_shell_environment(&shell, Duration::from_secs(2)).unwrap();
+        assert_eq!(environment.path, "/override/bin:/usr/bin");
+        assert_eq!(environment.kubeconfig.unwrap(), "/override/config.yaml");
+        fs::write(&shell, "#!/bin/sh\necho shell-failed >&2\nexit 1\n").unwrap();
+        assert!(read_login_shell_environment(&shell, Duration::from_secs(2))
+            .err().unwrap().contains("shell-failed"));
+        fs::write(&shell, "#!/bin/sh\nexec /bin/sleep 2\n").unwrap();
+        assert!(read_login_shell_environment(&shell, Duration::from_millis(50))
+            .err().unwrap().contains("timed out"));
     }
 
     #[test]

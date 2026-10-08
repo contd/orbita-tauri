@@ -9,12 +9,185 @@ Browse resources, inspect manifests, switch contexts, and run context-bound `kub
 
 # Features
 
+<!-- FEATURES:START -->
+_Auto-generated from Playwright screenshots in `e2e-results/screenshots` via `npm run docs:features`._
+
+### Dashboard (dark theme)
+
+Track cluster health at a glance in dark mode with summary metrics, workload readiness, and quick navigation cards.
+
+![Dashboard (dark theme)](./e2e-results/screenshots/dashboard-dark.png)
+
+### Dashboard (light theme)
+
+Switch themes instantly while keeping the same at-a-glance cluster health insights and navigation shortcuts.
+
+![Dashboard (light theme)](./e2e-results/screenshots/dashboard-light.png)
+
+### In-app logs viewer
+
+Open pod and node logs without leaving Orbita, then inspect output in a focused, scrollable panel.
+
+![In-app logs viewer](./e2e-results/screenshots/logs-panel.png)
+
+### Kubeconfig management
+
+Add, validate, edit, and save kubeconfigs directly in Settings, then switch contexts from the same workspace.
+
+![Kubeconfig management](./e2e-results/screenshots/settings-saved-kubeconfigs.png)
+
+### Context-aware kubectl terminal
+
+Run kubectl commands inside Orbita with context-safe execution, command history, and adjustable output panes.
+
+![Context-aware kubectl terminal](./e2e-results/screenshots/terminal-panel.png)
+
+### Clear tool availability status
+
+When kubectl is unavailable, Orbita clearly communicates terminal limitations while keeping the rest of the app usable.
+
+![Clear tool availability status](./e2e-results/screenshots/terminal-unavailable.png)
+
+### ClusterRoleBindings resource view
+
+Browse ClusterRoleBindings in a sortable table view with quick actions and detailed inspection support.
+
+![ClusterRoleBindings resource view](./e2e-results/screenshots/view-clusterrolebindings.png)
+
+### ClusterRoles resource view
+
+Browse ClusterRoles in a sortable table view with quick actions and detailed inspection support.
+
+![ClusterRoles resource view](./e2e-results/screenshots/view-clusterroles.png)
+
+### ConfigMaps resource view
+
+Browse ConfigMaps in a sortable table view with quick actions and detailed inspection support.
+
+![ConfigMaps resource view](./e2e-results/screenshots/view-configmaps.png)
+
+### CronJobs resource view
+
+Browse CronJobs in a sortable table view with quick actions and detailed inspection support.
+
+![CronJobs resource view](./e2e-results/screenshots/view-cronjobs.png)
+
+### DaemonSets resource view
+
+Browse DaemonSets in a sortable table view with quick actions and detailed inspection support.
+
+![DaemonSets resource view](./e2e-results/screenshots/view-daemonsets.png)
+
+### Deployments resource view
+
+Browse Deployments in a sortable table view with quick actions and detailed inspection support.
+
+![Deployments resource view](./e2e-results/screenshots/view-deployments.png)
+
+### Events resource view
+
+Browse Events in a sortable table view with quick actions and detailed inspection support.
+
+![Events resource view](./e2e-results/screenshots/view-events.png)
+
+### Ingresses resource view
+
+Browse Ingresses in a sortable table view with quick actions and detailed inspection support.
+
+![Ingresses resource view](./e2e-results/screenshots/view-ingresses.png)
+
+### Jobs resource view
+
+Browse Jobs in a sortable table view with quick actions and detailed inspection support.
+
+![Jobs resource view](./e2e-results/screenshots/view-jobs.png)
+
+### Namespaces resource view
+
+Browse Namespaces in a sortable table view with quick actions and detailed inspection support.
+
+![Namespaces resource view](./e2e-results/screenshots/view-namespaces.png)
+
+### Nodes resource view
+
+Browse Nodes in a sortable table view with quick actions and detailed inspection support.
+
+![Nodes resource view](./e2e-results/screenshots/view-nodes.png)
+
+### PersistentVolumeClaims resource view
+
+Browse PersistentVolumeClaims in a sortable table view with quick actions and detailed inspection support.
+
+![PersistentVolumeClaims resource view](./e2e-results/screenshots/view-persistentvolumeclaims.png)
+
+### PersistentVolumes resource view
+
+Browse PersistentVolumes in a sortable table view with quick actions and detailed inspection support.
+
+![PersistentVolumes resource view](./e2e-results/screenshots/view-persistentvolumes.png)
+
+### Pods resource view
+
+Browse Pods in a sortable table view with quick actions and detailed inspection support.
+
+![Pods resource view](./e2e-results/screenshots/view-pods.png)
+
+### ReplicaSets resource view
+
+Browse ReplicaSets in a sortable table view with quick actions and detailed inspection support.
+
+![ReplicaSets resource view](./e2e-results/screenshots/view-replicasets.png)
+
+### RoleBindings resource view
+
+Browse RoleBindings in a sortable table view with quick actions and detailed inspection support.
+
+![RoleBindings resource view](./e2e-results/screenshots/view-rolebindings.png)
+
+### Roles resource view
+
+Browse Roles in a sortable table view with quick actions and detailed inspection support.
+
+![Roles resource view](./e2e-results/screenshots/view-roles.png)
+
+### Secrets resource view
+
+Browse Secrets in a sortable table view with quick actions and detailed inspection support.
+
+![Secrets resource view](./e2e-results/screenshots/view-secrets.png)
+
+### ServiceAccounts resource view
+
+Browse ServiceAccounts in a sortable table view with quick actions and detailed inspection support.
+
+![ServiceAccounts resource view](./e2e-results/screenshots/view-serviceaccounts.png)
+
+### Services resource view
+
+Browse Services in a sortable table view with quick actions and detailed inspection support.
+
+![Services resource view](./e2e-results/screenshots/view-services.png)
+
+### StatefulSets resource view
+
+Browse StatefulSets in a sortable table view with quick actions and detailed inspection support.
+
+![StatefulSets resource view](./e2e-results/screenshots/view-statefulsets.png)
+
+### StorageClasses resource view
+
+Browse StorageClasses in a sortable table view with quick actions and detailed inspection support.
+
+![StorageClasses resource view](./e2e-results/screenshots/view-storageclasses.png)
+<!-- FEATURES:END -->
+
 ## Kubeconfig discovery
 
-At startup (and when running `kubectl`), Orbita checks the current user's home
-directory at `~/.kube/config` first, then the paths listed in `KUBECONFIG`, in
-environment order. Separate environment paths with `:` on macOS/Linux or `;` on
-Windows.
+At startup (and when running `kubectl`), Orbita uses the paths listed in
+`KUBECONFIG`, in environment order, when that variable is set. Only when it is
+unset does Orbita check the current user's `~/.kube/config` first. Separate
+environment paths with `:` on macOS/Linux or `;` on Windows. A set but empty or
+unusable `KUBECONFIG` does not silently fall back to the home config.
 
 Only `.kubeconfig` and `.yaml` files from `KUBECONFIG` are included, and their
 contents must parse as a kubeconfig with `apiVersion: v1`, `kind: Config`, and a
@@ -24,8 +197,20 @@ not scanned. Missing files and unrelated YAML documents are ignored; filesystem
 access errors are reported.
 
 The Settings search path, the legacy `~/kubeconfig` location, and saved in-app
-configs are checked afterward. Duplicate files are included only once. This order
-also determines precedence when `kubectl` merges configs with overlapping names.
+configs are checked afterward. When `KUBECONFIG` is set, the Settings search path
+does not reintroduce `~/.kube/config`. Duplicate files are included only once. This
+order also determines precedence when `kubectl` merges configs with overlapping names.
+
+### User PATH and desktop launches
+
+On macOS/Linux, startup reads exported `PATH` and `KUBECONFIG` from the user's
+interactive login shell (`SHELL`), including shell startup-file overrides. Windows
+uses the environment inherited by the app process. The environment is captured
+once per launch: the first executable on that PATH wins for `kubectl`, Docker,
+kind, AWS CLI, and Bash detection. Orbita also passes the same PATH to `kubectl`
+so credential plugins use the same tool overrides. Restart Orbita after changing
+shell exports. Shell startup has a ten-second timeout; failures are displayed
+rather than silently using a different PATH.
 
 <!-- FEATURES:START -->
 _Auto-generated from Playwright screenshots in `e2e-results/screenshots` via `npm run docs:features`._
@@ -271,7 +456,7 @@ _Generated from the latest local or CI test reports by `npm run docs:reports`. F
 | Suite | Total | Passed | Failed | Skipped | Flaky |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Unit | 131 | 131 | 0 | 0 | 0 |
-| E2E | 84 | 84 | 0 | 0 | 0 |
+| E2E | 85 | 85 | 0 | 0 | 0 |
 
 [Full unit report](https://contd.github.io/orbita-tauri/reports/unit-report/index.html) · [Unit JUnit XML](https://contd.github.io/orbita-tauri/reports/unit.xml) · [Full E2E report with coverage](https://contd.github.io/orbita-tauri/reports/e2e-report/index.html) · [Playwright HTML report](https://contd.github.io/orbita-tauri/e2e-report/index.html) · [E2E JSON](https://contd.github.io/orbita-tauri/reports/e2e.json)
 
@@ -280,7 +465,7 @@ _Generated from the latest local or CI test reports by `npm run docs:reports`. F
 | Suite | Lines | Functions | Branches |
 | --- | ---: | ---: | ---: |
 | Unit | 96.55% (1345/1393) | 93.20% (288/309) | Not reported |
-| E2E | 91.26% (1306/1431) | 90.95% (382/420) | 66.03% (908/1375) |
+| E2E | 91.48% (1310/1432) | 90.95% (382/420) | 66.01% (909/1377) |
 
 Coverage measures loaded TypeScript files under `src/`, excluding dependencies and test helpers. Unit coverage uses Bun; E2E coverage uses Chromium V8, mapped back to TypeScript through Vite source maps and converted to Istanbul HTML/LCOV. Summaries use the LCOV totals. These tools use different coverage instrumentation, so their percentages are not directly comparable. Bun does not report branch coverage in LCOV; "Not reported" is not zero coverage. "N/A" means there are no measurable items.
 
@@ -290,3 +475,4 @@ E2E coverage measures frontend JavaScript only, not the Rust backend, native Tau
 
 The full report links above are served on the [documentation site](https://contd.github.io/orbita-tauri/), not stored in Git.
 <!-- TEST-REPORTS:END -->
+

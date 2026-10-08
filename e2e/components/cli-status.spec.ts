@@ -1,5 +1,6 @@
 /**
- * Playwright checks for CLI availability indicators, hover tooltips, and Windows WSL state.
+ * Playwright checks for CLI availability indicators, tooltips, Windows WSL state,
+ * and visible login-shell startup errors.
  * @module e2e/components/cli-status.spec
  * @category Tests
  */
@@ -22,4 +23,23 @@ test("orbita-cli-status shows WSL on windows hosts", async ({ page }) => {
   const cli = page.locator("orbita-cli-status");
   await expect(cli.getByLabel("WSL: Not detected")).toBeVisible();
   await expect(cli.getByLabel("bash: Not detected")).toBeVisible();
+});
+
+test("startup reports login-shell environment errors instead of hiding detection failures", async ({ page }) => {
+  await launch(page);
+  await page.addInitScript(() => {
+    const host = window as typeof window & {
+      __ORBITA_BRIDGE__: (command: string, args?: unknown) => Promise<unknown>;
+    };
+    const bridge = host.__ORBITA_BRIDGE__;
+    host.__ORBITA_BRIDGE__ = async (command, args) => {
+      if (command === "check_cli_tools" || command === "get_contexts") {
+        throw new Error("Reading the login-shell environment timed out.");
+      }
+      return bridge(command, args);
+    };
+  });
+  await page.reload();
+  await expect(page.locator(".status-bar")).toContainText("Reading the login-shell environment timed out.");
+  await expect(page.locator("orbita-cli-status").getByLabel("kubectl: Not detected")).toBeVisible();
 });

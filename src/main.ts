@@ -957,8 +957,9 @@ async function loadCliTools(): Promise<void> {
       cli[key] = Boolean(result.tools[key]?.available);
       if (result.tools[key]?.path) cliPaths[key] = result.tools[key].path!;
     }
-  } catch {
+  } catch (error) {
     cli = { ...emptyCli };
+    notice = `Could not detect CLI tools: ${error instanceof Error ? error.message : String(error)}`;
   }
   cliChecking = false;
   render();
