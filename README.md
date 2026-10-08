@@ -9,6 +9,24 @@ Browse resources, inspect manifests, switch contexts, and run context-bound `kub
 
 # Features
 
+## Kubeconfig discovery
+
+At startup (and when running `kubectl`), Orbita checks the current user's home
+directory at `~/.kube/config` first, then the paths listed in `KUBECONFIG`, in
+environment order. Separate environment paths with `:` on macOS/Linux or `;` on
+Windows.
+
+Only `.kubeconfig` and `.yaml` files from `KUBECONFIG` are included, and their
+contents must parse as a kubeconfig with `apiVersion: v1`, `kind: Config`, and a
+`contexts` list. Environment paths may also name directories, which are scanned
+recursively in sorted order using the same file filters; hidden directories are
+not scanned. Missing files and unrelated YAML documents are ignored; filesystem
+access errors are reported.
+
+The Settings search path, the legacy `~/kubeconfig` location, and saved in-app
+configs are checked afterward. Duplicate files are included only once. This order
+also determines precedence when `kubectl` merges configs with overlapping names.
+
 <!-- FEATURES:START -->
 _Auto-generated from Playwright screenshots in `e2e-results/screenshots` via `npm run docs:features`._
 

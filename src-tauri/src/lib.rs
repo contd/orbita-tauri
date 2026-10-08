@@ -3,8 +3,9 @@ use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     env, fs,
+    ffi::OsStr,
     io::Read,
-    path::{Component, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -147,62 +148,106 @@ fn read_preferences_file(app: &AppHandle) -> Result<Value, String> {
 }
 
 // Directory scans may hit unrelated files (e.g. kubectx/kubens state), which break kubectl.
-fn looks_like_kubeconfig(path: &PathBuf) -> bool {
-    match fs::metadata(path) {
-        Ok(meta) if meta.len() <= 5 * 1024 * 1024 => {}
-        _ => return false,
+fn looks_like_kubeconfig(path: &Path) -> Result<bool, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|e| format!("Could not inspect kubeconfig {}: {e}", path.display()))?;
+    if metadata.len() > 5 * 1024 * 1024 {
+        return Ok(false);
     }
-    fs::read_to_string(path)
-        .map(|text| {
-            text.lines().any(|l| l.trim_start().starts_with("apiVersion:") || l.trim_start().starts_with("\"apiVersion\""))
-                && text.contains("contexts")
-        })
-        .unwrap_or(false)
+    let bytes = fs::read(path)
+        .map_err(|e| format!("Could not read kubeconfig {}: {e}", path.display()))?;
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return Ok(false);
+    };
+    let Ok(document) = serde_yaml_ng::from_str::<Value>(text) else {
+        return Ok(false);
+    };
+    Ok(document.get("apiVersion").and_then(Value::as_str) == Some("v1")
+        && document.get("kind").and_then(Value::as_str) == Some("Config")
+        && document.get("contexts").is_some_and(Value::is_array))
 }
 
-fn add_path_or_directory(path: &PathBuf, paths: &mut Vec<PathBuf>) {
-    if path.is_file() {
-        paths.push(path.clone());
-    } else if path.is_dir() {
-        let Ok(entries) = fs::read_dir(path) else {
-            return;
-        };
-        for entry in entries.flatten() {
+fn environment_kubeconfig_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(OsStr::to_str),
+        Some("kubeconfig" | "yaml")
+    )
+}
+
+fn add_path_or_directory(
+    path: &Path,
+    paths: &mut Vec<PathBuf>,
+    environment: bool,
+) -> Result<(), String> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "Could not inspect kubeconfig path {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    if metadata.is_file() {
+        if !environment || (environment_kubeconfig_file(path) && looks_like_kubeconfig(path)?) {
+            paths.push(path.to_path_buf());
+        }
+    } else if metadata.is_dir() {
+        let mut entries = fs::read_dir(path)
+            .map_err(|e| format!("Could not scan kubeconfig directory {}: {e}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Could not read kubeconfig directory {}: {e}", path.display()))?;
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
             let candidate = entry.path();
             let hidden = entry.file_name().to_string_lossy().starts_with('.');
-            if hidden {
+            if hidden && !(environment && environment_kubeconfig_file(&candidate)) {
                 continue;
             }
-            if candidate.is_dir() {
-                add_path_or_directory(&candidate, paths);
-            } else if candidate.is_file() && looks_like_kubeconfig(&candidate) {
+            let file_type = entry.file_type().map_err(|e| {
+                format!("Could not inspect kubeconfig entry {}: {e}", candidate.display())
+            })?;
+            if file_type.is_dir() {
+                add_path_or_directory(&candidate, paths, environment)?;
+            } else if candidate.is_file()
+                && (!environment || environment_kubeconfig_file(&candidate))
+                && looks_like_kubeconfig(&candidate)?
+            {
                 paths.push(candidate);
             }
         }
     }
+    Ok(())
 }
 
-fn kubeconfig_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
+fn discover_kubeconfig_paths(
+    home: &Path,
+    environment_paths: Option<&OsStr>,
+    configured: Option<&Path>,
+    saved_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
     let mut candidates = Vec::new();
-    let preferences = read_preferences_file(app)?;
-    if let Some(configured) = preferences.get("searchPath").and_then(Value::as_str) {
-        let normalized = normalize_search_path(app, configured)?;
-        add_path_or_directory(&PathBuf::from(normalized), &mut candidates);
-    }
-    if let Some(environment_paths) = env::var_os("KUBECONFIG") {
-        for path in env::split_paths(&environment_paths) {
-            add_path_or_directory(&path, &mut candidates);
+    add_path_or_directory(
+        &home.join(".kube").join("config"),
+        &mut candidates,
+        false,
+    )?;
+    if let Some(environment_paths) = environment_paths {
+        for path in env::split_paths(environment_paths).filter(|path| !path.as_os_str().is_empty()) {
+            add_path_or_directory(&path, &mut candidates, true)?;
         }
     }
-    let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    add_path_or_directory(&home.join(".kube").join("config"), &mut candidates);
-    add_path_or_directory(&home.join("kubeconfig"), &mut candidates);
-    let saved_dir = preferences_path(app)?.with_file_name("kubeconfigs");
-    add_path_or_directory(&saved_dir, &mut candidates);
+    if let Some(configured) = configured {
+        add_path_or_directory(configured, &mut candidates, false)?;
+    }
+    add_path_or_directory(&home.join("kubeconfig"), &mut candidates, false)?;
+    add_path_or_directory(saved_dir, &mut candidates, false)?;
 
     let mut unique = Vec::new();
     for path in candidates {
-        let normalized = fs::canonicalize(&path).unwrap_or(path);
+        let normalized = fs::canonicalize(&path)
+            .map_err(|e| format!("Could not resolve kubeconfig {}: {e}", path.display()))?;
         if !unique.contains(&normalized) {
             unique.push(normalized);
         }
@@ -210,8 +255,31 @@ fn kubeconfig_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
     Ok(unique)
 }
 
+fn kubeconfig_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let preferences = read_preferences_file(app)?;
+    let configured = preferences
+        .get("searchPath")
+        .and_then(Value::as_str)
+        .map(|value| normalize_search_path(app, value).map(PathBuf::from))
+        .transpose()?;
+    let environment = env::var_os("KUBECONFIG");
+    let saved_dir = preferences_path(app)?.with_file_name("kubeconfigs");
+    discover_kubeconfig_paths(
+        &home,
+        environment.as_deref(),
+        configured.as_deref(),
+        &saved_dir,
+    )
+}
+
 fn set_kubeconfig_environment(command: &mut Command, app: &AppHandle) -> Result<(), String> {
     let paths = kubeconfig_paths(app)?;
+    configure_kubeconfig_environment(command, &paths)
+}
+
+fn configure_kubeconfig_environment(command: &mut Command, paths: &[PathBuf]) -> Result<(), String> {
+    command.env_remove("KUBECONFIG");
     if !paths.is_empty() {
         command.env(
             "KUBECONFIG",
@@ -711,4 +779,147 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Orbita");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const CONFIG: &str = "apiVersion: v1\nkind: Config\ncontexts:\n  - name: test\n    context:\n      cluster: test\n      user: test\nclusters: []\nusers: []\n";
+    static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            let path = env::temp_dir().join(format!(
+                "orbita-kubeconfig-{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed),
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn write(&self, name: &str, content: &str) -> PathBuf {
+            let path = self.0.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, content).unwrap();
+            fs::canonicalize(path).unwrap()
+        }
+
+        fn discover(&self, paths: &[PathBuf], configured: Option<&Path>) -> Vec<PathBuf> {
+            let environment = env::join_paths(paths).unwrap();
+            discover_kubeconfig_paths(
+                &self.0,
+                Some(&environment),
+                configured,
+                &self.0.join("saved"),
+            )
+            .unwrap()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn kubeconfig_sources_prioritize_home_then_environment_then_settings() {
+        let fixture = Fixture::new();
+        let home = fixture.write(".kube/config", CONFIG);
+        let first = fixture.write("first.kubeconfig", CONFIG);
+        let second = fixture.write("second.yaml", CONFIG);
+        let configured = fixture.write("configured/config", CONFIG);
+        let legacy = fixture.write("kubeconfig", CONFIG);
+        let saved = fixture.write("saved/context.yaml", CONFIG);
+        assert_eq!(
+            fixture.discover(&[first.clone(), second.clone()], Some(&configured)),
+            vec![home, first, second, configured, legacy, saved],
+        );
+    }
+
+    #[test]
+    fn environment_files_require_supported_extensions_and_kubeconfig_content() {
+        let fixture = Fixture::new();
+        let yaml = fixture.write("valid.yaml", CONFIG);
+        let kubeconfig = fixture.write("valid.kubeconfig", CONFIG);
+        let json = fixture.write(
+            "json.yaml",
+            r#"{"apiVersion":"v1","kind":"Config","contexts":[]}"#,
+        );
+        let invalid = [
+            fixture.write("config", CONFIG),
+            fixture.write("config.yml", CONFIG),
+            fixture.write("notes.yaml", "apiVersion: v1\nkind: Pod\ncontexts: []"),
+            fixture.write("broken.yaml", "apiVersion: v1\nkind: Config\ncontexts: ["),
+            fixture.write("nested.yaml", "data:\n  apiVersion: v1\n  kind: Config\n  contexts: []"),
+            fixture.write("wrong-contexts.yaml", "apiVersion: v1\nkind: Config\ncontexts: not-a-list"),
+        ];
+        let mut paths = invalid.to_vec();
+        paths.extend([yaml.clone(), kubeconfig.clone(), json.clone()]);
+        assert_eq!(fixture.discover(&paths, None), vec![yaml, kubeconfig, json]);
+    }
+
+    #[test]
+    fn environment_directories_scan_valid_files_in_stable_order() {
+        let fixture = Fixture::new();
+        let first = fixture.write("configs/a.kubeconfig", CONFIG);
+        let second = fixture.write("configs/b.yaml", CONFIG);
+        let nested = fixture.write("configs/nested/c.yaml", CONFIG);
+        fixture.write("configs/ignore.yml", CONFIG);
+        fixture.write("configs/unrelated.yaml", "apiVersion: v1\nkind: Pod\ncontexts: []");
+        fixture.write("configs/.hidden/config.yaml", CONFIG);
+        assert_eq!(
+            fixture.discover(&[fixture.0.join("configs")], None),
+            vec![first, second, nested],
+        );
+    }
+
+    #[test]
+    fn missing_default_and_environment_paths_do_not_block_valid_configs() {
+        let fixture = Fixture::new();
+        let valid = fixture.write("context.yaml", CONFIG);
+        assert_eq!(
+            fixture.discover(&[fixture.0.join("missing.yaml"), valid.clone()], None),
+            vec![valid],
+        );
+        assert!(fixture.discover(&[], None).is_empty());
+    }
+
+    #[test]
+    fn duplicate_paths_keep_first_occurrence() {
+        let fixture = Fixture::new();
+        let home = fixture.write(".kube/config", CONFIG);
+        let valid = fixture.write("configs/context.yaml", CONFIG);
+        assert_eq!(
+            fixture.discover(
+                &[valid.clone(), fixture.0.join("configs"), valid.clone()],
+                Some(&fixture.0.join(".kube")),
+            ),
+            vec![home, valid],
+        );
+    }
+
+    #[test]
+    fn empty_discovery_removes_unfiltered_inherited_environment() {
+        let mut command = Command::new("kubectl");
+        configure_kubeconfig_environment(&mut command, &[]).unwrap();
+        assert!(command
+            .get_envs()
+            .any(|(name, value)| name == "KUBECONFIG" && value.is_none()));
+        let paths = vec![PathBuf::from("a.yaml"), PathBuf::from("b.kubeconfig")];
+        configure_kubeconfig_environment(&mut command, &paths).unwrap();
+        let expected = env::join_paths(&paths).unwrap();
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "KUBECONFIG" && value == Some(expected.as_os_str())
+        }));
+    }
 }
