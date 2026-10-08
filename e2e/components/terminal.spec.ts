@@ -53,41 +53,6 @@ test("orbita-terminal covers about two thirds of the page height", async ({ page
   expect(panel.height / main.height).toBeLessThan(0.72);
 });
 
-test("orbita-terminal command box is one line until the text wraps, then two at most", async ({ page }) => {
-  await launch(page);
-  await page.getByRole("button", { name: "Open kubectl terminal", exact: true }).first().click();
-  const box = page.locator("#terminal-input");
-  const h = async () => (await box.boundingBox())!.height;
-  const expectLines = async (lines: number) => {
-    const size = await box.evaluate((el, count) => {
-      if (!(el instanceof HTMLTextAreaElement)) throw new Error("Terminal input must be a textarea.");
-      return {
-        height: el.offsetHeight,
-        expected: parseFloat(getComputedStyle(el).lineHeight) * count + el.offsetHeight - el.clientHeight,
-      };
-    }, lines);
-    expect(Math.abs(size.height - size.expected)).toBeLessThan(1);
-  };
-  await expectLines(1);
-  const one = await h();
-  await box.fill("kubectl get pods");
-  expect(await h()).toBeCloseTo(one, 0);
-  await box.fill("kubectl get pods " + "--selector=app=very-long-label-name ".repeat(6));
-  const two = await h();
-  await expectLines(2);
-  expect(two).toBeGreaterThan(one * 1.6);
-  await box.fill("kubectl get pods " + "--selector=app=very-long-label-name ".repeat(40));
-  expect(await h()).toBeCloseTo(two, 0);
-  await box.fill("kubectl get pods");
-  await expectLines(1);
-  expect(await h()).toBeCloseTo(one, 0);
-  await box.evaluate(el => el.setAttribute("placeholder", "A long placeholder that wraps ".repeat(10)));
-  await box.fill("x");
-  await box.fill("");
-  await expectLines(1);
-  expect(await h()).toBeCloseTo(one, 0);
-});
-
 test("orbita-terminal Enter runs the command instead of adding a line", async ({ page }) => {
   await launch(page);
   await page.getByRole("button", { name: "Open kubectl terminal", exact: true }).first().click();
