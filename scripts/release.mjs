@@ -20,7 +20,7 @@ export function validateVersions(pkg, tauri, cargo, tag = `v${pkg.version}`) {
     throw new Error("package.json must contain a release version such as 1.0.0 or 1.0.0-beta.1.");
   }
   if (tauri.version !== pkg.version || cargoVersion !== pkg.version) {
-    throw new Error("Release versions must match in package.json, src-tauri/tauri.conf.json and src-tauri/Cargo.toml.");
+    throw new Error(`Release versions must match: package.json=${pkg.version}, src-tauri/tauri.conf.json=${tauri.version}, src-tauri/Cargo.toml=${cargoVersion ?? "missing"}.`);
   }
   if (tag !== `v${pkg.version}`) throw new Error(`Release tag must be v${pkg.version}, received ${tag}.`);
   return { version: pkg.version, tag, prerelease: pkg.version.includes("-") };

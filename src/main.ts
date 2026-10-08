@@ -327,7 +327,8 @@ const TERMINAL_INPUT_MAX_LINES = 2;
 function fitTerminalInput(): void {
   const box = query<HTMLTextAreaElement>("#terminal-input");
   if (!box) return;
-  box.style.height = "auto";
+  // Measure content without the platform's default textarea/scrollbar minimum height.
+  box.style.height = "0px";
   const line = parseFloat(getComputedStyle(box).lineHeight) || box.clientHeight;
   const chrome = box.offsetHeight - box.clientHeight;
   const lines = Math.min(TERMINAL_INPUT_MAX_LINES, Math.max(1, Math.round(box.scrollHeight / line)));

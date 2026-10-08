@@ -200,7 +200,7 @@ On successful CI runs on `main` or release runs, the reports and screenshots are
 
 ## Desktop releases
 
-GitHub Actions publishes a release when a version tag such as `v1.0.0` is pushed. The CI workflow can also be run manually with a matching release tag. The versions in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` must match the tag; update and commit `src-tauri/Cargo.lock` after changing the Rust package version. Existing tags must point to the selected commit.
+GitHub Actions publishes a release when a version tag such as `v1.1.0` is pushed. The CI workflow can also be run manually with a matching release tag. The versions in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` must match the tag; update and commit `src-tauri/Cargo.lock` after changing the Rust package version. Existing tags must point to the selected commit. CI/test/release jobs use Ubuntu 24.04 and Node 24-compatible actions; Linux installer builds remain on Ubuntu 22.04 for compatibility.
 
 Both unit and E2E tests must pass before any native build job starts. Builds produce:
 

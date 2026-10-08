@@ -23,6 +23,13 @@ test("prerelease tags are identified", () => {
   assert.equal(validateVersions({ version }, { version }, cargo.replace("1.0.0", version)).prerelease, true);
 });
 
+test("version mismatch errors report the actual manifest versions", () => {
+  assert.throws(
+    () => validateVersions({ version: "1.1.0" }, { version: "1.0.0" }, cargo, "v1.1.0"),
+    /package\.json=1\.1\.0, src-tauri\/tauri\.conf\.json=1\.0\.0, src-tauri\/Cargo\.toml=1\.0\.0/,
+  );
+});
+
 async function fixture(callback) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbita-release-test-"));
   try {
