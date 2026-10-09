@@ -1,0 +1,16 @@
+.tsd-page-toolbar .title,
+.tsd-page-title h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tsd-page-toolbar .title::before,
+.tsd-page-title h1::before {
+  content: "";
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 1.5em;
+  height: 1.5em;
+  background: url("./favicon.svg") center / contain no-repeat;
+}

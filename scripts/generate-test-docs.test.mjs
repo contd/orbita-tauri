@@ -11,6 +11,7 @@
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Application } from "typedoc";
@@ -172,4 +173,27 @@ test("TypeDoc documents every script and test module in the correct section", as
   const links = app.options.getValue("navigationLinks");
   assert.match(links.Scripts, /modules\.html#scripts$/);
   assert.match(links.Tests, /modules\.html#tests$/);
+  const output = await fs.mkdtemp(path.join(os.tmpdir(), "orbita-docs-branding-"));
+  try {
+    await app.generateDocs(project, output);
+    assert.equal(app.logger.hasErrors(), false);
+    assert.equal(
+      await fs.readFile(path.join(output, "assets/favicon.svg"), "utf8"),
+      await fs.readFile(path.join(root, "icon.svg"), "utf8"),
+    );
+    const css = await fs.readFile(path.join(output, "assets/custom.css"), "utf8");
+    assert.match(css, /\.tsd-page-toolbar \.title::before/);
+    assert.match(css, /\.tsd-page-title h1::before/);
+    assert.match(css, /url\("\.\/favicon\.svg"\)/);
+    for (const [file, prefix] of [
+      ["index.html", ""],
+      ["modules/scripts_coverage.html", "../"],
+    ]) {
+      const html = await fs.readFile(path.join(output, file), "utf8");
+      assert.ok(html.includes(`href="${prefix}assets/favicon.svg"`), `${file} must link to the favicon`);
+      assert.ok(html.includes(`href="${prefix}assets/custom.css"`), `${file} must load logo styles`);
+    }
+  } finally {
+    await fs.rm(output, { recursive: true, force: true });
+  }
 });

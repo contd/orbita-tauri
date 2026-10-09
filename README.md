@@ -393,6 +393,10 @@ The [GitHub Pages documentation site](https://contd.github.io/orbita-tauri/) use
 
 TypeDoc expands all source files in `scripts/`, `tests/`, and `e2e/`. Module comments use `@module` and `@category` to keep these sections organized. `tsconfig.docs.json` includes JavaScript tooling and Bun/Node test declarations without changing the application build configuration.
 
+The documentation uses `icon.svg` as its favicon and as the logo before the site
+and page titles. TypeDoc copies the icon and `scripts/branding.css` into the
+site assets so branding works on both the homepage and nested API pages.
+
 ```sh
 npm test
 npm run test:e2e
@@ -475,4 +479,3 @@ E2E coverage measures frontend JavaScript only, not the Rust backend, native Tau
 
 The full report links above are served on the [documentation site](https://contd.github.io/orbita-tauri/), not stored in Git.
 <!-- TEST-REPORTS:END -->
-

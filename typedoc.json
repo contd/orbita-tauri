@@ -8,6 +8,8 @@
   "out": "docs-site",
   "readme": "README.md",
   "name": "Orbita",
+  "favicon": "icon.svg",
+  "customCss": "scripts/branding.css",
   "navigationLinks": {
     "API": "https://contd.github.io/orbita-tauri/modules.html",
     "Scripts": "https://contd.github.io/orbita-tauri/modules.html#scripts",
