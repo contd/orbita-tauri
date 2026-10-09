@@ -469,7 +469,7 @@ _Generated from the latest local or CI test reports by `npm run docs:reports`. F
 | Suite | Lines | Functions | Branches |
 | --- | ---: | ---: | ---: |
 | Unit | 96.55% (1345/1393) | 93.20% (288/309) | Not reported |
-| E2E | 91.48% (1310/1432) | 90.95% (382/420) | 66.01% (909/1377) |
+| E2E | 91.48% (1310/1432) | 90.95% (382/420) | 66.08% (910/1377) |
 
 Coverage measures loaded TypeScript files under `src/`, excluding dependencies and test helpers. Unit coverage uses Bun; E2E coverage uses Chromium V8, mapped back to TypeScript through Vite source maps and converted to Istanbul HTML/LCOV. Summaries use the LCOV totals. These tools use different coverage instrumentation, so their percentages are not directly comparable. Bun does not report branch coverage in LCOV; "Not reported" is not zero coverage. "N/A" means there are no measurable items.
 
@@ -479,3 +479,4 @@ E2E coverage measures frontend JavaScript only, not the Rust backend, native Tau
 
 The full report links above are served on the [documentation site](https://contd.github.io/orbita-tauri/), not stored in Git.
 <!-- TEST-REPORTS:END -->
+
